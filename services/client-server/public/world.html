@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vibecheck Game · World Prime</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="page-world">
+    <div class="site-shell world-shell world-shell-focused">
+      <header class="topbar panel glass compact-topbar">
+        <div>
+          <p class="eyebrow">World Prime</p>
+          <h1 id="world-title">Frontier Map</h1>
+          <p class="muted" id="world-subtitle">Explore the region map, enter a tile for a closer local map, and let AI actions turn intent into outcomes.</p>
+        </div>
+        <div class="topbar-actions compact-topbar-actions">
+          <div class="world-badges compact-world-badges">
+            <div class="mini-chip status-inline-chip"><span>Hero</span><strong id="hero-name">—</strong></div>
+            <div class="mini-chip status-inline-chip"><span>Region</span><strong id="region-chip">—</strong></div>
+            <div class="mini-chip status-inline-chip"><span>Chunk</span><strong id="chunk-chip">0,0</strong></div>
+            <div class="mini-chip status-inline-chip"><span>Tile</span><strong id="coord-chip">0,0</strong></div>
+          </div>
+          <div class="button-row wrap">
+            <button id="back-to-hub-btn" class="secondary">Back to Hub</button>
+            <button id="refresh-world-btn" class="ghost">Refresh World</button>
+            <button id="open-npc-btn" class="ghost">NPCs &amp; Quests</button>
+          </div>
+        </div>
+      </header>
+
+      <main class="world-main-grid">
+        <section class="panel map-panel map-panel-dominant">
+          <div class="panel-title-row">
+            <h2>Map &amp; Terrain</h2>
+            <div class="button-row wrap">
+              <span class="tiny-label" id="map-level-pill">Region map</span>
+              <span class="tiny-label" id="world-status-pill">Loading…</span>
+            </div>
+          </div>
+          <div class="scene-title" id="scene-title">Loading region…</div>
+          <div class="scene-text" id="scene-text">Reading the nearby ground and weather.</div>
+
+          <div class="map-toolbar map-toolbar-split">
+            <div class="scene-block compact-block map-hint-block">
+              <span class="block-label">Travel Flow</span>
+              <div id="edge-travel-summary" class="block-copy">Move toward a region edge and the next region will take over automatically.</div>
+            </div>
+            <div class="button-row wrap movement-row">
+              <button id="enter-tile-btn" class="secondary">Enter Tile Detail</button>
+              <button id="exit-tile-btn" class="ghost">Return to Region Map</button>
+              <button id="move-north-btn" class="ghost">↑</button>
+              <button id="move-west-btn" class="ghost">←</button>
+              <button id="move-south-btn" class="ghost">↓</button>
+              <button id="move-east-btn" class="ghost">→</button>
+            </div>
+          </div>
+
+          <div class="map-stage map-stage-dominant">
+            <div class="map-grid-wrap">
+              <div id="chunk-grid" class="chunk-grid large-chunk-grid" aria-label="World grid"></div>
+            </div>
+            <aside class="tile-inspector panel-subtle">
+              <div class="panel-title-row tight-row">
+                <h3>Tile Inspector</h3>
+                <span class="tiny-label" id="objective-chip">No objective</span>
+              </div>
+              <div id="tile-summary" class="block-copy">Select a tile to inspect the ground, nearby patches, and structures.</div>
+              <div class="scene-block compact-block">
+                <span class="block-label">Region Summary</span>
+                <div id="region-summary" class="block-copy">Waiting…</div>
+              </div>
+              <div class="scene-block compact-block">
+                <span class="block-label">Detailed Tile View</span>
+                <div id="detail-summary" class="block-copy">Enter a tile to inspect the local ground inside that region tile.</div>
+              </div>
+              <div class="scene-block compact-block">
+                <span class="block-label">Resources Nearby</span>
+                <div id="resource-summary" class="chip-wrap"></div>
+              </div>
+              <div class="scene-block compact-block">
+                <span class="block-label">Placed Objects</span>
+                <div id="placed-objects-summary" class="chip-wrap"></div>
+              </div>
+              <label>
+                Build Piece
+                <select id="build-type-select"></select>
+              </label>
+              <div id="build-requirements-summary" class="muted small-copy">Build pieces only appear when you have the needed materials.</div>
+              <div class="button-row wrap">
+                <button id="place-block-btn">Place on Tile</button>
+                <button id="remove-block-btn" class="secondary">Remove</button>
+              </div>
+            </aside>
+          </div>
+
+          <section class="panel strip-panel">
+            <div class="panel-title-row">
+              <h2>Inventory</h2>
+              <span class="tiny-label">Below map</span>
+            </div>
+            <div id="inventory-box" class="strip-row"></div>
+          </section>
+
+          <section class="panel strip-panel">
+            <div class="panel-title-row">
+              <h2>Character State</h2>
+              <span class="tiny-label" id="combat-state-pill">No encounter</span>
+            </div>
+            <div id="vitals-box" class="meter-strip"></div>
+            <div class="strip-sub">
+              <h3>Discovered Skills</h3>
+              <div id="skills-box" class="strip-row"></div>
+            </div>
+          </section>
+        </section>
+
+        <aside class="world-right-rail">
+          <section class="panel action-panel ai-action-panel cleaned-action-panel">
+            <div class="panel-title-row">
+              <h2>AI Action Menu</h2>
+              <span class="tiny-label" id="action-mode-pill">Queue ready</span>
+            </div>
+            <p class="muted small-copy">Action checks now run automatically 2.5 seconds after you stop typing. Use guide questions when the player needs direction.</p>
+            <div class="scene-block compact-block guide-block">
+              <span class="block-label">Player Questions</span>
+              <div class="guide-question-grid">
+                <button class="ghost guide-question-btn" data-guide-question="How can I learn crafting?">Learn crafting</button>
+                <button class="ghost guide-question-btn" data-guide-question="What are the core skills?">Core skills</button>
+                <button class="ghost guide-question-btn" data-guide-question="How do I start building a house?">Start building</button>
+                <button class="ghost guide-question-btn" data-guide-question="What should I do next?">What now?</button>
+              </div>
+            </div>
+            <div class="action-form-grid">
+              <label>
+                Primary Skill Used
+                <select id="primary-skill-select"></select>
+              </label>
+              <label>
+                Secondary Skill Used
+                <select id="secondary-skill-select"></select>
+              </label>
+              <label class="full-span">
+                Action Note
+                <textarea id="action-note" rows="5" placeholder="Example: I stand beside the river and rinse the herb bundle before unpacking it into raw herbs."></textarea>
+              </label>
+            </div>
+            <div class="button-row wrap">
+              <button id="analyze-action-btn" class="secondary">Check Now</button>
+              <button id="queue-action-btn">Queue Action</button>
+              <button id="run-action-btn">Run Queue</button>
+              <button id="clear-action-queue-btn" class="ghost">Clear</button>
+            </div>
+            <div id="action-analysis-box" class="dialogue-box">Action analysis will appear here.</div>
+            <div class="scene-block compact-block">
+              <span class="block-label">Queued Actions</span>
+              <div id="action-queue-box" class="stack-list compact empty-state">No queued actions.</div>
+            </div>
+            <div class="scene-block compact-block">
+              <span class="block-label">Queue Results</span>
+              <div id="action-results-box" class="stack-list compact empty-state">Run the queue to see outcomes, rewards, failures, and inventory changes.</div>
+            </div>
+          </section>
+        </aside>
+      </main>
+
+      <section class="panel journal-panel feed-bottom feed-limited-panel">
+        <div class="panel-title-row">
+          <h2>Adventure Feed</h2>
+          <span class="tiny-label">Newest first · scroll after 2–3</span>
+        </div>
+        <div id="feed" class="feed-list empty-state feed-limited">Your adventure entries will appear here.</div>
+      </section>
+    </div>
+
+    <div id="npc-modal" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop" id="npc-modal-backdrop"></div>
+      <div class="modal-card panel">
+        <div class="panel-title-row">
+          <h2>NPCs, Quests, and Talk</h2>
+          <div class="button-row wrap">
+            <span class="tiny-label" id="npc-count-pill">0 NPCs</span>
+            <button id="close-npc-btn" class="ghost">Close</button>
+          </div>
+        </div>
+        <div class="world-npc-grid">
+          <div>
+            <div id="npc-list" class="npc-list"></div>
+          </div>
+          <div class="stack-list">
+            <div class="action-form-grid">
+              <label>
+                NPC Tone
+                <select id="npc-tone-select">
+                  <option value="grounded">Grounded</option>
+                  <option value="warm">Warm</option>
+                  <option value="mysterious">Mysterious</option>
+                  <option value="grim">Grim</option>
+                </select>
+              </label>
+              <label>
+                NPC Theme
+                <select id="npc-theme-select">
+                  <option value="frontier_fantasy">Frontier Fantasy</option>
+                  <option value="hard_survival">Hard Survival</option>
+                  <option value="ancient_mystic">Ancient Mystic</option>
+                </select>
+              </label>
+              <label class="full-span">
+                Dialogue Prompt
+                <input id="ai-prompt" value="What should I do next?" />
+              </label>
+            </div>
+            <div class="button-row wrap">
+              <button id="talk-btn">Talk</button>
+              <button id="ai-dialogue-btn" class="secondary">AI Flavor</button>
+              <button id="offer-quest-btn" class="secondary">Ask for Quest</button>
+              <button id="accept-quest-btn" class="secondary">Accept Quest</button>
+              <button id="complete-quest-btn" class="secondary">Complete Quest</button>
+            </div>
+            <div id="dialogue-box" class="dialogue-box">No dialogue yet.</div>
+            <div class="scene-block compact-block">
+              <span class="block-label">Communication Rules</span>
+              <div id="npc-rules-box" class="rules-list">Loading NPC tone and theme rules…</div>
+            </div>
+            <div class="scene-block compact-block">
+              <span class="block-label">Quest Tracker</span>
+              <div id="quest-box" class="quest-box">No active quest.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="system-modal" class="modal hidden" aria-hidden="true">
+      <div class="modal-backdrop" id="system-modal-backdrop"></div>
+      <div class="modal-card panel system-modal-card">
+        <div class="panel-title-row">
+          <h2 id="system-modal-title">System Message</h2>
+          <button id="close-system-btn" class="ghost">Close</button>
+        </div>
+        <div id="system-modal-body" class="system-modal-body">No system message.</div>
+      </div>
+    </div>
+
+    <script type="module" src="/world.js"></script>
+  </body>
+</html>

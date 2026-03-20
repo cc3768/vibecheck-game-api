@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vibecheck Game · Character Hub</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="page-lobby">
+    <div class="site-shell">
+      <header class="topbar panel glass">
+        <div>
+          <p class="eyebrow">Character selection & account hub</p>
+          <h1>Choose your path</h1>
+          <p class="muted">Pick a hero, make a new one, read news, check social activity, adjust settings, then press play.</p>
+        </div>
+        <div class="topbar-actions stacked-actions">
+          <div class="status-card compact-card">
+            <span>Logged in as</span>
+            <strong id="account-name">—</strong>
+          </div>
+          <div class="status-card compact-card">
+            <span>Selected Character</span>
+            <strong id="selected-character">None</strong>
+          </div>
+          <div class="button-row wrap">
+            <button id="play-btn">Play</button>
+            <button id="logout-btn" class="ghost">Logout</button>
+          </div>
+        </div>
+      </header>
+
+      <main class="hub-layout">
+        <aside class="panel sidebar-panel">
+          <nav class="nav-list" id="hub-tabs">
+            <button class="tab-button active" data-tab="characters">Characters</button>
+            <button class="tab-button" data-tab="news">Game News</button>
+            <button class="tab-button" data-tab="social">Social</button>
+            <button class="tab-button" data-tab="settings">Settings</button>
+          </nav>
+
+          <div class="status-card">
+            <span>Gateway</span>
+            <strong id="gateway-status">Checking…</strong>
+          </div>
+          <div class="status-card">
+            <span>Services</span>
+            <strong id="service-status">Waiting…</strong>
+          </div>
+          <button id="refresh-status-btn" class="secondary full-width">Refresh Status</button>
+        </aside>
+
+        <section class="hub-main">
+          <section class="panel tab-panel active" data-panel="characters">
+            <div class="panel-title-row">
+              <div>
+                <p class="eyebrow">Character roster</p>
+                <h2>Your heroes</h2>
+              </div>
+              <span class="tiny-label" id="character-summary">0 characters</span>
+            </div>
+
+            <div class="two-column-grid">
+              <div>
+                <div id="character-list" class="stack-list empty-state">Loading characters…</div>
+              </div>
+
+              <div class="creator-box">
+                <div class="section-head">
+                  <h3>Create Character</h3>
+                  <span class="tiny-label" id="creation-hint">Ready</span>
+                </div>
+                <form id="create-character-form" class="form-grid compact-gap">
+                  <label>
+                    Name
+                    <input id="character-name" maxlength="18" value="Aster" />
+                  </label>
+                  <label>
+                    Race
+                    <select id="character-race">
+                      <option value="HUMAN">Human</option>
+                      <option value="ELF">Elf</option>
+                      <option value="DWARF">Dwarf</option>
+                      <option value="WOLFMAN">Wolfman</option>
+                    </select>
+                  </label>
+                  <div class="button-row">
+                    <button type="submit">Create Character</button>
+                    <button type="button" id="reload-characters-btn" class="secondary">Reload</button>
+                  </div>
+                </form>
+                <div class="notice-box slim-box">
+                  If this account has no characters, this creation area becomes your main focus automatically.
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel tab-panel" data-panel="news">
+            <div class="panel-title-row">
+              <div>
+                <p class="eyebrow">News board</p>
+                <h2>World updates</h2>
+              </div>
+              <span class="tiny-label">Local mock news</span>
+            </div>
+            <div class="news-grid" id="news-grid"></div>
+          </section>
+
+          <section class="panel tab-panel" data-panel="social">
+            <div class="panel-title-row">
+              <div>
+                <p class="eyebrow">Friends & chat</p>
+                <h2>Community foyer</h2>
+              </div>
+              <span class="tiny-label" id="social-state">Local friends + live lobby chat</span>
+            </div>
+
+            <div class="two-column-grid social-grid">
+              <div>
+                <h3>Friends</h3>
+                <form id="friend-form" class="inline-form">
+                  <input id="friend-name" placeholder="Add friend handle" />
+                  <button type="submit">Add</button>
+                </form>
+                <div id="friend-list" class="stack-list empty-state">No friends saved yet.</div>
+              </div>
+              <div>
+                <h3>Lobby chat</h3>
+                <div id="chat-list" class="chat-list empty-state">Chat is loading…</div>
+                <form id="chat-form" class="inline-form">
+                  <input id="chat-input" placeholder="Say hello to the lobby" />
+                  <button type="submit">Send</button>
+                </form>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel tab-panel" data-panel="settings">
+            <div class="panel-title-row">
+              <div>
+                <p class="eyebrow">Settings</p>
+                <h2>Client preferences</h2>
+              </div>
+              <span class="tiny-label">Saved in this browser</span>
+            </div>
+            <form id="settings-form" class="form-grid settings-grid">
+              <label class="checkbox-row">
+                <input id="setting-sfx" type="checkbox" />
+                <span>Enable sound effects</span>
+              </label>
+              <label class="checkbox-row">
+                <input id="setting-music" type="checkbox" />
+                <span>Enable music</span>
+              </label>
+              <label class="checkbox-row">
+                <input id="setting-compact" type="checkbox" />
+                <span>Use compact UI</span>
+              </label>
+              <label>
+                Chat Color Theme
+                <select id="setting-chat-theme">
+                  <option value="ocean">Ocean</option>
+                  <option value="ember">Ember</option>
+                  <option value="forest">Forest</option>
+                </select>
+              </label>
+              <div class="button-row">
+                <button type="submit">Save Settings</button>
+              </div>
+            </form>
+          </section>
+        </section>
+      </main>
+
+      <section class="panel feed-panel">
+        <div class="panel-title-row">
+          <h2>Hub activity</h2>
+          <span class="tiny-label">Newest first</span>
+        </div>
+        <div id="feed" class="feed-list empty-state">Your hub actions will appear here.</div>
+      </section>
+    </div>
+
+    <script type="module" src="/lobby.js"></script>
+  </body>
+</html>

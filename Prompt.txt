@@ -1,0 +1,10 @@
+Restructure the Play world UI so that way it more geared to the map and the AI action menu,
+Action Q should give you a response so you know what happened with that action plus if it gave you a reward
+do not give Bundle's as rewards only give spesific items additionally do not show skills in the skills drop down that the player
+has not descovered, We should give them general additionally make sure we do a skill check to see if the player can ever do the action they want with the skills they have
+there is always a chance that a action failed and bad rewards to exist so cutting down a tree 1 - 1mil could land on you
+
+Make sure we save characters to the account so when you login they still exist
+
+Players should only be able to see one world when they start they can desover more but the traveling to worlds is done via the bi frost which has not been talked about yet
+players could use ritualistic magic to also travel but that is very advanced

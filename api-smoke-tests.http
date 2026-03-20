@@ -1,0 +1,40 @@
+### login through gateway
+POST http://localhost:41730/api/v1/session/login
+Content-Type: application/json
+
+{
+  "username": "demo",
+  "password": "demo"
+}
+
+### service mesh
+GET http://localhost:41730/api/v1/services/status
+
+### create character
+POST http://localhost:41734/api/v1/character/create
+Content-Type: application/json
+
+{
+  "accountId": "acc_demo",
+  "name": "Ceecee",
+  "race": "HUMAN"
+}
+
+### xp evaluate
+POST http://localhost:41735/api/v1/xp/evaluate
+Content-Type: application/json
+
+{
+  "userId": "acc_demo",
+  "userAuth": "demo",
+  "actions": [
+    {
+      "actionType": "WOODCUTTING",
+      "duration": 30,
+      "count": 5,
+      "completion": 1,
+      "context": {"method": "HAND"},
+      "tools": ["BRONZE_AXE"]
+    }
+  ]
+}

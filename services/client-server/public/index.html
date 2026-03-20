@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vibecheck Game · Login</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body class="page-login">
+    <div class="site-shell auth-shell">
+      <section class="hero-card panel glass">
+        <div class="hero-copy">
+          <p class="eyebrow">Vibecheck MMORPG prototype</p>
+          <h1>Welcome back to the frontier</h1>
+          <p class="muted large-copy">
+            Sign in to continue, or create a fresh session and move straight into character creation. If this browser has site data,
+            your last username will already be here waiting for you.
+          </p>
+          <div class="feature-row">
+            <span class="mini-chip">Persistent site data</span>
+            <span class="mini-chip">Character hub</span>
+            <span class="mini-chip">Playable starter world</span>
+          </div>
+        </div>
+        <div class="hero-side">
+          <div class="status-card compact-card">
+            <span>Gateway</span>
+            <strong id="gateway-status">Checking…</strong>
+          </div>
+          <div class="status-card compact-card">
+            <span>Services</span>
+            <strong id="service-status">Waiting…</strong>
+          </div>
+          <button id="refresh-status-btn" class="secondary full-width">Refresh Status</button>
+        </div>
+      </section>
+
+      <section class="login-card panel">
+        <div class="panel-title-row">
+          <div>
+            <p class="eyebrow">Account login</p>
+            <h2>Enter the game</h2>
+          </div>
+          <span class="tiny-label" id="session-state">No session</span>
+        </div>
+
+        <form id="login-form" class="form-grid">
+          <label>
+            Username
+            <input id="username" autocomplete="username" placeholder="demo" />
+          </label>
+          <label>
+            Password
+            <input id="password" type="password" autocomplete="current-password" placeholder="demo" />
+          </label>
+          <label class="checkbox-row">
+            <input id="remember-me" type="checkbox" />
+            <span>Remember my login on this site</span>
+          </label>
+          <div class="button-row">
+            <button type="submit">Login</button>
+            <button type="button" id="clear-site-data-btn" class="ghost">Clear Site Data</button>
+          </div>
+        </form>
+
+        <div class="meta-grid two-up">
+          <div class="compact-card">
+            <span>Remembered Username</span>
+            <strong id="remembered-user">None</strong>
+          </div>
+          <div class="compact-card">
+            <span>Current Account</span>
+            <strong id="current-account">—</strong>
+          </div>
+        </div>
+
+        <div class="notice-box">
+          <strong>Current flow</strong>
+          <p>
+            This build treats login as account creation for now. After a successful sign-in, you go to the character hub. If no character
+            exists for the account, the hub drops you directly into creation.
+          </p>
+        </div>
+      </section>
+
+      <section class="panel feed-panel">
+        <div class="panel-title-row">
+          <h2>Recent activity</h2>
+          <span class="tiny-label">Local session feed</span>
+        </div>
+        <div id="feed" class="feed-list empty-state">Nothing yet. Sign in to begin.</div>
+      </section>
+    </div>
+
+    <script type="module" src="/login.js"></script>
+  </body>
+</html>

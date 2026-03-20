@@ -1,0 +1,74 @@
+[
+  {
+    "characterId": "char_j4uzqzmx",
+    "accountId": "acc_demo",
+    "name": "Aster",
+    "race": "HUMAN",
+    "position": {
+      "worldId": "world_prime",
+      "regionId": "starter_lowlands",
+      "x": 1,
+      "y": 1
+    },
+    "stats": {
+      "strength": 5,
+      "agility": 5,
+      "intellect": 5,
+      "vitality": 5
+    },
+    "vitals": {
+      "hp": 100,
+      "mp": 25,
+      "stamina": 100
+    },
+    "skills": [
+      {
+        "skill": "GENERAL",
+        "level": 6,
+        "xp": 521
+      },
+      {
+        "skill": "SURVIVAL",
+        "level": 1,
+        "xp": 91
+      },
+      {
+        "skill": "WOODCUTTING",
+        "level": 1,
+        "xp": 10
+      },
+      {
+        "skill": "FORAGING",
+        "level": 1,
+        "xp": 17
+      },
+      {
+        "skill": "SOCIAL",
+        "level": 1,
+        "xp": 0
+      }
+    ],
+    "knowledge": {
+      "unlockedTopics": [
+        "starter_tips"
+      ],
+      "unlockedRecipes": []
+    },
+    "inventory": {
+      "bread": 1,
+      "tinder_kit": 1,
+      "scrap": 2,
+      "stem_fiber": 1,
+      "bitter_root": 9,
+      "wood_log": 10,
+      "wild_berry": 6,
+      "mushroom_cap": 3,
+      "bark_strip": 4,
+      "splintered_bark": 5
+    },
+    "discoveredWorlds": [
+      "world_prime"
+    ],
+    "createdAt": "2026-03-19T15:18:39.166Z"
+  }
+]

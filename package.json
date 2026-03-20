@@ -1,0 +1,41 @@
+{
+  "name": "vibecheck-game-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "services/*"
+  ],
+  "scripts": {
+    "dev:all": "concurrently -n client,login,chat,world,character,xp,action,production,combat,npc,rewards,quest,ai \"npm run dev:client-server\" \"npm run dev:login-system\" \"npm run dev:chat-system\" \"npm run dev:world-system\" \"npm run dev:character-system\" \"npm run dev:xp-system\" \"npm run dev:action-system\" \"npm run dev:production-system\" \"npm run dev:combat-system\" \"npm run dev:npc-system\" \"npm run dev:rewards-system\" \"npm run dev:quest-system\" \"npm run dev:ai-system\"",
+    "dev:client-server": "tsx services/client-server/src/index.ts",
+    "dev:login-system": "tsx services/login-system/src/index.ts",
+    "dev:chat-system": "tsx services/chat-system/src/index.ts",
+    "dev:world-system": "tsx services/world-system/src/index.ts",
+    "dev:character-system": "tsx services/character-system/src/index.ts",
+    "dev:xp-system": "tsx services/xp-system/src/index.ts",
+    "dev:action-system": "tsx services/action-system/src/index.ts",
+    "dev:production-system": "tsx services/production-system/src/index.ts",
+    "dev:combat-system": "tsx services/combat-system/src/index.ts",
+    "dev:npc-system": "tsx services/npc-system/src/index.ts",
+    "dev:rewards-system": "tsx services/rewards-system/src/index.ts",
+    "dev:quest-system": "tsx services/quest-system/src/index.ts",
+    "dev:ai-system": "tsx services/ai-system/src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "airtable": "^0.12.2",
+    "concurrently": "^9.1.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}

@@ -1,4 +1,4 @@
-import { SERVICE_VERSION, createServiceApp, getRequestId, sendSuccess } from "../../../packages/shared/src/index";
+import { SERVICE_VERSION, createServiceApp, getRequestId, getServiceUrl, sendSuccess } from "../../../packages/shared/src/index";
 
 const SERVICE_NAME = "ai-system";
 const PORT = 41742;
@@ -28,83 +28,191 @@ const NPC_RULES = {
   ]
 };
 
-const CANONICAL_DISCOVERIES: Record<string, {
+type DynamicItemRecord = {
   itemKey: string;
   name: string;
   description: string;
-  category: string;
-  preferredSkills: string[];
-  requiredTerrain: string[];
+  category?: string;
+  preferredSkills?: string[];
+  requiredTerrain?: string[];
+  synonyms?: string[];
+  discoverable?: boolean;
+  status?: string;
+};
+
+type DynamicSkillRecord = {
+  skillKey: string;
+  name: string;
+  description: string;
+  unlockHint: string;
+  prereqs?: string[];
+  discoverable?: boolean;
+  status?: string;
+};
+
+type RecipeRecord = {
+  recipeKey: string;
+  name: string;
+  inputs: Array<{ itemKey: string; amount: number }>;
+  outputs: Array<{ itemKey: string; amount: number }>;
+  tools?: Array<{ toolKey: string }>;
+  station?: string;
+  keywords?: string[];
+};
+
+type DiscoverySeedRecord = {
+  discoveryKey: string;
+  type: string;
+  targetKey: string;
   aliases: string[];
-  futureSkill?: { skillKey: string; name: string; description: string; unlockHint: string };
-}> = {
-  flint: {
-    itemKey: "flint",
-    name: "Flint",
-    description: "A hard dark stone that breaks into sharp edges, useful for primitive tools and sparks.",
-    category: "MINERAL",
-    preferredSkills: ["MINING", "SURVIVAL"],
-    requiredTerrain: ["rock", "grass"],
+  terrainRules?: string[];
+  intentRules?: string[];
+  confidenceMin?: number;
+  autoCreate?: boolean;
+  status?: string;
+  item?: DynamicItemRecord | null;
+  skill?: DynamicSkillRecord | null;
+  recipe?: RecipeRecord | null;
+  reason?: string;
+};
+
+type ContentSnapshot = {
+  items: Record<string, { name: string; description: string }>;
+  dynamicItems: Record<string, DynamicItemRecord>;
+  skills: Record<string, DynamicSkillRecord>;
+  skillPrereqs: Record<string, string[]>;
+  intentSkills: Record<string, string[]>;
+  herbCatalog: Array<{ key: string; weight: number; terrain: string[] }>;
+  discoveries: DiscoverySeedRecord[];
+  aliases: Record<string, { canonicalType: string; canonicalKey: string; confidenceBoost?: number }>;
+  recipes: Record<string, RecipeRecord>;
+  source: string;
+};
+
+type Proposal = {
+  type: "item" | "skill" | "recipe";
+  key: string;
+  name?: string;
+  description?: string;
+  confidence: number;
+  reason: string;
+  item?: DynamicItemRecord;
+  skill?: DynamicSkillRecord;
+  recipe?: RecipeRecord;
+  aliases?: string[];
+  requiredTerrain?: string[];
+  preferredSkills?: string[];
+};
+
+const FALLBACK_DISCOVERIES: DiscoverySeedRecord[] = [
+  {
+    discoveryKey: "discovery_flint",
+    type: "item",
+    targetKey: "flint",
     aliases: ["flint", "flint stone", "flint shard"],
-    futureSkill: {
+    terrainRules: ["rock", "grass"],
+    intentRules: ["MINE", "SCOUT", "FORAGE"],
+    confidenceMin: 0.6,
+    autoCreate: true,
+    status: "active",
+    item: {
+      itemKey: "flint",
+      name: "Flint",
+      description: "A hard dark stone that breaks into sharp edges, useful for primitive tools and sparks.",
+      category: "MINERAL",
+      preferredSkills: ["MINING", "SURVIVAL"],
+      requiredTerrain: ["rock", "grass"],
+      synonyms: ["flint", "flint stone", "flint shard"],
+      discoverable: true,
+      status: "active"
+    },
+    skill: {
       skillKey: "KNAPPING",
       name: "Knapping",
       description: "The shaping of flint and similar stone into sharp, useful forms.",
-      unlockHint: "Chip, shape, or craft simple flint tools to discover Knapping."
-    }
+      unlockHint: "Chip, shape, or craft simple flint tools to discover Knapping.",
+      prereqs: ["CRAFTING"],
+      discoverable: true,
+      status: "active"
+    },
+    reason: "Rocky terrain often exposes workable flint."
   },
-  quartz: {
-    itemKey: "quartz",
-    name: "Quartz",
-    description: "A pale crystal vein with glassy fracture lines and a faint inner gleam.",
-    category: "MINERAL",
-    preferredSkills: ["MINING"],
-    requiredTerrain: ["rock"],
+  {
+    discoveryKey: "discovery_quartz",
+    type: "item",
+    targetKey: "quartz",
     aliases: ["quartz", "quarz", "quartz crystal", "crystal quartz"],
-    futureSkill: {
+    terrainRules: ["rock"],
+    intentRules: ["MINE", "SCOUT"],
+    confidenceMin: 0.6,
+    autoCreate: true,
+    status: "active",
+    item: {
+      itemKey: "quartz",
+      name: "Quartz",
+      description: "A pale crystal vein with glassy fracture lines and a faint inner gleam.",
+      category: "MINERAL",
+      preferredSkills: ["MINING"],
+      requiredTerrain: ["rock"],
+      synonyms: ["quartz", "quarz", "quartz crystal", "crystal quartz"],
+      discoverable: true,
+      status: "active"
+    },
+    skill: {
       skillKey: "LAPIDARY",
       name: "Lapidary",
       description: "The cutting, shaping, and finishing of crystal and stone.",
-      unlockHint: "Cut, polish, or mount quartz and other crystals to discover Lapidary."
-    }
-  },
-  clay: {
-    itemKey: "clay_lump",
-    name: "Clay Lump",
-    description: "Wet dense clay scooped from the earth, ready for shaping or drying.",
-    category: "EARTH",
-    preferredSkills: ["SURVIVAL", "CRAFTING"],
-    requiredTerrain: ["water", "grass"],
-    aliases: ["clay", "mud clay", "potter clay"]
-  },
-  reeds: {
-    itemKey: "reeds",
-    name: "Reeds",
-    description: "Flexible wetland stalks that can be dried and woven into simple work.",
-    category: "PLANT",
-    preferredSkills: ["FORAGING", "SURVIVAL"],
-    requiredTerrain: ["water", "grass"],
-    aliases: ["reed", "reeds", "rushes"]
-  },
-  fiber: {
-    itemKey: "plant_fiber",
-    name: "Plant Fiber",
-    description: "Long stripped fibers that can be twisted into lashings or cord.",
-    category: "PLANT",
-    preferredSkills: ["FORAGING", "CRAFTING"],
-    requiredTerrain: ["forest", "grass"],
-    aliases: ["fiber", "plant fiber", "fibers"]
-  },
-  obsidian: {
-    itemKey: "obsidian_shard",
-    name: "Obsidian Shard",
-    description: "A volcanic black glass shard with an edge far sharper than common stone.",
-    category: "MINERAL",
-    preferredSkills: ["MINING", "SURVIVAL"],
-    requiredTerrain: ["rock"],
-    aliases: ["obsidian", "volcanic glass"]
+      unlockHint: "Cut, polish, or mount quartz and other crystals to discover Lapidary.",
+      prereqs: ["MINING"],
+      discoverable: true,
+      status: "active"
+    },
+    reason: "Quartz is a known crystal-bearing discovery for rock tiles."
   }
-};
+];
+
+const COMMON_WORDS = new Set([
+  "the", "a", "an", "i", "me", "my", "you", "it", "that", "this", "these", "those", "thing", "things", "stuff", "item", "items", "world", "area", "place", "common", "word", "words", "something", "anything", "everything", "there", "here", "look", "search", "find", "gather", "collect", "make", "craft", "build", "shape", "prepare", "mine", "forage", "check", "want", "need", "should", "could", "would", "with", "from", "into", "using", "new", "more", "less", "such"
+]);
+
+async function serviceFetch<T = unknown>(serviceName: string, routePath: string, method = "GET", body?: unknown): Promise<T> {
+  const response = await fetch(`${getServiceUrl(serviceName)}${routePath}`, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      "x-internal-service-token": process.env.INTERNAL_SERVICE_TOKEN ?? "local-dev-token"
+    },
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {})
+  });
+  const json = (await response.json()) as { data?: T };
+  if (!response.ok) throw new Error(`${serviceName} returned ${response.status}`);
+  return json.data as T;
+}
+
+let snapshotCache: { at: number; data: ContentSnapshot | null } = { at: 0, data: null };
+async function getContentSnapshot(force = false): Promise<ContentSnapshot> {
+  if (!force && snapshotCache.data && Date.now() - snapshotCache.at < 30_000) return snapshotCache.data;
+  try {
+    const data = await serviceFetch<ContentSnapshot>("content-system", "/api/v1/content/snapshot");
+    snapshotCache = { at: Date.now(), data };
+    return data;
+  } catch {
+    const fallback: ContentSnapshot = {
+      items: {},
+      dynamicItems: Object.fromEntries(FALLBACK_DISCOVERIES.filter((entry) => entry.item).map((entry) => [entry.item!.itemKey, entry.item!])),
+      skills: Object.fromEntries(FALLBACK_DISCOVERIES.filter((entry) => entry.skill).map((entry) => [entry.skill!.skillKey, entry.skill!])),
+      skillPrereqs: {},
+      intentSkills: {},
+      herbCatalog: [],
+      discoveries: FALLBACK_DISCOVERIES,
+      aliases: Object.fromEntries(FALLBACK_DISCOVERIES.flatMap((entry) => (entry.aliases ?? []).map((alias) => [normalizeText(alias), { canonicalType: entry.type, canonicalKey: entry.targetKey, confidenceBoost: 0.18 }]))),
+      recipes: {},
+      source: "seed"
+    };
+    snapshotCache = { at: Date.now(), data: fallback };
+    return fallback;
+  }
+}
 
 function hasToxicLanguage(content: string): boolean {
   const banned = ["slur", "hate", "kill"];
@@ -176,14 +284,24 @@ function buildNpcReply(payload: Record<string, unknown>) {
   return `${lead} ${guidance} ${tonalTail} ${themeTail}`.trim();
 }
 
-function detectCanonicalDiscovery(text: string) {
+function detectCanonicalDiscovery(text: string, snapshot: ContentSnapshot) {
   const normalized = normalizeText(text);
-  for (const entry of Object.values(CANONICAL_DISCOVERIES)) {
-    if (entry.aliases.some((alias) => normalized.includes(normalizeText(alias)))) {
-      return entry;
-    }
+  for (const entry of snapshot.discoveries ?? []) {
+    if ((entry.aliases ?? []).some((alias) => normalized.includes(normalizeText(alias)))) return entry;
+  }
+  const aliasHit = Object.entries(snapshot.aliases ?? {}).find(([alias]) => normalized.includes(alias));
+  if (aliasHit) {
+    return (snapshot.discoveries ?? []).find((entry) => entry.targetKey === aliasHit[1].canonicalKey) ?? null;
   }
   return null;
+}
+
+function isLikelyCommonWord(candidate: string) {
+  const normalized = normalizeText(candidate);
+  if (!normalized || normalized.length < 3) return true;
+  const words = normalized.split(" ");
+  if (words.length > 4) return true;
+  return words.every((word) => COMMON_WORDS.has(word));
 }
 
 function extractCandidatePhrase(text: string, intent: string): string | null {
@@ -195,92 +313,86 @@ function extractCandidatePhrase(text: string, intent: string): string | null {
   for (const pattern of patterns) {
     const match = normalized.match(pattern);
     if (match?.[1]) {
-      const candidate = match[1]
-        .replace(/\b(with|from|using|near|at|on|into|out of)\b.*$/, "")
-        .trim();
-      if (candidate) return candidate;
+      const candidate = match[1].replace(/\b(with|from|using|near|at|on|into|out of)\b.*$/, "").trim();
+      if (candidate && !isLikelyCommonWord(candidate)) return candidate;
     }
   }
 
-  if (intent === "MINE") {
-    const mineTarget = normalized.match(/\b([a-z]+)\b/g)?.find((token) => !["mine", "rock", "stone", "ore", "quarry"].includes(token));
-    if (mineTarget) return mineTarget;
-  }
-
-  if (intent === "FORAGE" || intent === "SCOUT") {
-    const forageTarget = normalized.match(/\b([a-z]+)\b/g)?.find((token) => !["forage", "search", "find", "look", "gather", "collect", "nearby", "area"].includes(token));
-    if (forageTarget) return forageTarget;
-  }
-
-  return null;
+  const tokens = normalized.match(/\b([a-z][a-z_-]{2,})\b/g) ?? [];
+  const filtered = tokens.filter((token) => !COMMON_WORDS.has(token));
+  if (intent === "MINE") return filtered.find((token) => !["rock", "stone", "ore", "quarry"].includes(token)) ?? null;
+  if (intent === "FORAGE" || intent === "SCOUT") return filtered.find((token) => !["nearby", "patch", "terrain", "brush"].includes(token)) ?? null;
+  if (intent === "BUILD" || intent === "CRAFT_RECIPE") return filtered.find((token) => !["tool", "recipe", "craft", "build"].includes(token)) ?? null;
+  return filtered[0] ?? null;
 }
 
-function pickDynamicSkill(text: string, intent: string, canonical: ReturnType<typeof detectCanonicalDiscovery>) {
+function pickDynamicSkill(text: string, intent: string, canonical: DiscoverySeedRecord | null) {
   const normalized = normalizeText(text);
   if (/(knap|knapp|chip stone|shape flint|arrowhead|stone blade|flint tool)/.test(normalized)) {
     return {
       skillKey: "KNAPPING",
       name: "Knapping",
       description: "The shaping of brittle stone into edges, points, and practical tools.",
-      unlockHint: "Shape flint, obsidian, or quartz into useful forms to discover Knapping."
-    };
+      unlockHint: "Shape flint, obsidian, or quartz into useful forms to discover Knapping.",
+      prereqs: ["CRAFTING"],
+      discoverable: true,
+      status: "active"
+    } satisfies DynamicSkillRecord;
   }
   if (/(lapidar|polish|facet|cut crystal|cut quartz|gem work|mount crystal)/.test(normalized)) {
     return {
       skillKey: "LAPIDARY",
       name: "Lapidary",
       description: "The cutting and finishing of crystal and decorative stone.",
-      unlockHint: "Cut or polish quartz and other crystals to discover Lapidary."
-    };
+      unlockHint: "Cut or polish quartz and other crystals to discover Lapidary.",
+      prereqs: ["MINING"],
+      discoverable: true,
+      status: "active"
+    } satisfies DynamicSkillRecord;
   }
   if (/(weave|woven|cordage|rope|braid fiber|basket)/.test(normalized)) {
     return {
       skillKey: "WEAVING",
       name: "Weaving",
       description: "The twisting and interlocking of fibers into stronger forms.",
-      unlockHint: "Twist reeds or plant fiber into bindings and simple goods to discover Weaving."
-    };
+      unlockHint: "Twist reeds or plant fiber into bindings and simple goods to discover Weaving.",
+      prereqs: ["FORAGING"],
+      discoverable: true,
+      status: "active"
+    } satisfies DynamicSkillRecord;
   }
   if (/(mason|stonework|stone wall|cut stone|dress stone|mortar)/.test(normalized) || (intent === "BUILD" && normalized.includes("stone"))) {
     return {
       skillKey: "MASONRY",
       name: "Masonry",
       description: "The careful shaping and fitting of stone into lasting structures.",
-      unlockHint: "Build with stone and shaped blocks to discover Masonry."
-    };
+      unlockHint: "Build with stone and shaped blocks to discover Masonry.",
+      prereqs: ["BUILDING"],
+      discoverable: true,
+      status: "active"
+    } satisfies DynamicSkillRecord;
   }
   if (/(alchemy|potion|tincture|distill|compound|reagent)/.test(normalized)) {
     return {
       skillKey: "ALCHEMY",
       name: "Alchemy",
       description: "The combining of volatile ingredients into concentrated effects.",
-      unlockHint: "Experiment with herbs, ash, and crystal reagents to discover Alchemy."
-    };
+      unlockHint: "Experiment with herbs, ash, and crystal reagents to discover Alchemy.",
+      prereqs: ["CRAFTING"],
+      discoverable: true,
+      status: "active"
+    } satisfies DynamicSkillRecord;
   }
-  if (canonical?.futureSkill && (intent === "CRAFT_RECIPE" || intent === "BUILD" || /shape|craft|make|tool|cut|polish/.test(normalized))) {
-    return canonical.futureSkill;
-  }
+  if (canonical?.skill && (intent === "CRAFT_RECIPE" || intent === "BUILD" || /shape|craft|make|tool|cut|polish/.test(normalized))) return canonical.skill;
   return null;
 }
 
-function buildDynamicItem(candidate: string, intent: string, nearbyTerrain: string[], canonical: ReturnType<typeof detectCanonicalDiscovery>) {
-  if (canonical) {
-    return {
-      itemKey: canonical.itemKey,
-      name: canonical.name,
-      description: canonical.description,
-      category: canonical.category,
-      preferredSkills: canonical.preferredSkills,
-      requiredTerrain: canonical.requiredTerrain,
-      synonyms: canonical.aliases
-    };
-  }
-
+function buildDynamicItem(candidate: string, intent: string, nearbyTerrain: string[], canonical: DiscoverySeedRecord | null) {
+  if (canonical?.item) return canonical.item;
+  if (!candidate || isLikelyCommonWord(candidate)) return null;
   const itemKey = slugifyWords(candidate);
   const terrain = uniqueList([
-    intent === "MINE" ? "rock" : null,
-    intent === "FORAGE" ? (nearbyTerrain.includes("forest") ? "forest" : "grass") : null,
-    ...nearbyTerrain.slice(0, 2)
+    ...(nearbyTerrain.length ? nearbyTerrain : [intent === "MINE" ? "rock" : intent === "FORAGE" ? "forest" : intent === "BUILD" ? "grass" : "grass"])
   ]);
   const category = intent === "MINE" ? "MINERAL" : intent === "FORAGE" || intent === "SCOUT" ? "PLANT" : intent === "BUILD" ? "BUILDING_COMPONENT" : "CRAFTED_GOOD";
   const preferredSkills = uniqueList([
@@ -306,15 +418,14 @@ function buildDynamicItem(candidate: string, intent: string, nearbyTerrain: stri
     category,
     preferredSkills,
     requiredTerrain: terrain,
-    synonyms: [candidate]
-  };
+    synonyms: uniqueList([candidate]),
+    discoverable: true,
+    status: "active"
+  } satisfies DynamicItemRecord;
 }
 
-function buildRecipeHint(text: string, intent: string, item: ReturnType<typeof buildDynamicItem>) {
-  if (!item || !(intent === "CRAFT_RECIPE" || intent === "BUILD" || /craft|make|build|shape|assemble|forge|brew/.test(normalizeText(text)))) {
-    return null;
-  }
-
+function buildRecipeHint(text: string, intent: string, item: DynamicItemRecord | null) {
+  if (!item || !(intent === "CRAFT_RECIPE" || intent === "BUILD" || /craft|make|build|shape|assemble|forge|brew/.test(normalizeText(text)))) return null;
   const normalized = normalizeText(text);
   if (item.itemKey === "flint" && /(knife|blade|point|arrow)/.test(normalized)) {
     return {
@@ -323,9 +434,8 @@ function buildRecipeHint(text: string, intent: string, item: ReturnType<typeof b
       inputs: [{ itemKey: "flint", amount: 1 }, { itemKey: "stem_fiber", amount: 1 }],
       outputs: [{ itemKey: "flint_blade", amount: 1 }],
       keywords: ["flint", "blade", "knife", "primitive tool"]
-    };
+    } satisfies RecipeRecord;
   }
-
   if (item.itemKey === "quartz" && /(focus|charm|lens|pendant|setting)/.test(normalized)) {
     return {
       recipeKey: "recipe_quartz_focus",
@@ -333,25 +443,79 @@ function buildRecipeHint(text: string, intent: string, item: ReturnType<typeof b
       inputs: [{ itemKey: "quartz", amount: 1 }, { itemKey: "stem_fiber", amount: 1 }],
       outputs: [{ itemKey: "quartz_focus", amount: 1 }],
       keywords: ["quartz", "focus", "charm", "lens"]
-    };
+    } satisfies RecipeRecord;
   }
-
   if (intent === "BUILD") {
     return {
       recipeKey: `recipe_${item.itemKey}`,
-      name: titleCaseLocal(item.itemKey),
+      name: item.name,
       inputs: [{ itemKey: "wood_log", amount: 1 }],
       outputs: [{ itemKey: item.itemKey, amount: 1 }],
       keywords: [item.itemKey, item.name.toLowerCase()]
-    };
+    } satisfies RecipeRecord;
   }
-
   return {
     recipeKey: `recipe_${item.itemKey}`,
     name: item.name,
-    inputs: [{ itemKey: item.preferredSkills.includes("MINING") ? "stone_chunk" : "stem_fiber", amount: 1 }],
+    inputs: [{ itemKey: item.preferredSkills?.includes("MINING") ? "stone_chunk" : "stem_fiber", amount: 1 }],
     outputs: [{ itemKey: item.itemKey, amount: 1 }],
     keywords: [item.itemKey, item.name.toLowerCase()]
+  } satisfies RecipeRecord;
+}
+
+function buildAnalysis(note: string, intent: string, nearbyTerrain: string[], knownItems: string[], knownSkills: string[], snapshot: ContentSnapshot) {
+  const canonical = detectCanonicalDiscovery(note, snapshot);
+  const candidate = extractCandidatePhrase(note, intent) ?? canonical?.aliases?.[0] ?? null;
+  const proposals: Proposal[] = [];
+  const item = candidate ? buildDynamicItem(candidate, intent, nearbyTerrain, canonical) : null;
+  const skill = pickDynamicSkill(note, intent, canonical);
+  const recipe = buildRecipeHint(note, intent, item);
+
+  if (item && !knownItems.includes(item.itemKey)) {
+    proposals.push({
+      type: "item",
+      key: item.itemKey,
+      name: item.name,
+      description: item.description,
+      confidence: canonical ? 0.95 : 0.76,
+      reason: canonical?.reason ?? `The note appears to reference a valid world material called ${item.name}.`,
+      item,
+      aliases: uniqueList([candidate, ...(item.synonyms ?? [])]),
+      requiredTerrain: item.requiredTerrain,
+      preferredSkills: item.preferredSkills
+    });
+  }
+
+  if (skill && !knownSkills.includes(skill.skillKey)) {
+    proposals.push({
+      type: "skill",
+      key: skill.skillKey,
+      name: skill.name,
+      description: skill.description,
+      confidence: canonical?.skill?.skillKey === skill.skillKey ? 0.92 : 0.74,
+      reason: skill.unlockHint,
+      skill
+    });
+  }
+
+  if (recipe && !snapshot.recipes[recipe.recipeKey]) {
+    proposals.push({
+      type: "recipe",
+      key: recipe.recipeKey,
+      name: recipe.name,
+      description: `A craftable result inferred from the note for ${recipe.name}.`,
+      confidence: 0.68,
+      reason: `The note suggests a craft path for ${recipe.name}.`,
+      recipe
+    });
+  }
+
+  return {
+    intent,
+    target: candidate ? { text: candidate, normalizedKey: slugifyWords(candidate), type: item ? "item_candidate" : "unknown" } : null,
+    confidence: proposals.length ? Math.max(...proposals.map((proposal) => proposal.confidence)) : canonical ? 0.6 : 0.32,
+    proposals,
+    message: proposals.length ? `Generated ${proposals.length} canonical content proposal(s).` : "No stable content proposal was inferred from that note."
   };
 }
 
@@ -409,31 +573,51 @@ app.post("/api/v1/ai/suggest-skill", (req, res) => {
   });
 });
 
-app.post("/api/v1/ai/discover-content", (req, res) => {
+app.post("/api/v1/ai/analyze-action", async (req, res) => {
   const requestId = getRequestId(req);
   const note = String(req.body.note ?? req.body.text ?? "");
   const intent = String(req.body.intent ?? "GENERAL").toUpperCase();
   const nearbyTerrain = Array.isArray(req.body.nearbyTerrain) ? req.body.nearbyTerrain.map((value: unknown) => normalizeText(String(value))) : [];
-  const canonical = detectCanonicalDiscovery(note);
-  const candidate = extractCandidatePhrase(note, intent) ?? canonical?.aliases?.[0] ?? null;
-  const item = candidate ? buildDynamicItem(candidate, intent, nearbyTerrain, canonical) : null;
-  const skill = pickDynamicSkill(note, intent, canonical);
-  const recipe = item ? buildRecipeHint(note, intent, item) : null;
+  const knownItems = Array.isArray(req.body.knownItems) ? req.body.knownItems.map((value: unknown) => String(value)) : [];
+  const knownSkills = Array.isArray(req.body.knownSkills) ? req.body.knownSkills.map((value: unknown) => String(value).toUpperCase()) : [];
+  const snapshot = await getContentSnapshot();
+  const analysis = buildAnalysis(note, intent, nearbyTerrain, knownItems, knownSkills, snapshot);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, {
+    result: {
+      model: "frontier-discovery-rules-v2",
+      confidence: analysis.confidence,
+      intent: analysis.intent,
+      target: analysis.target,
+      proposals: analysis.proposals,
+      message: analysis.message
+    }
+  });
+});
+
+app.post("/api/v1/ai/discover-content", async (req, res) => {
+  const requestId = getRequestId(req);
+  const note = String(req.body.note ?? req.body.text ?? "");
+  const intent = String(req.body.intent ?? "GENERAL").toUpperCase();
+  const nearbyTerrain = Array.isArray(req.body.nearbyTerrain) ? req.body.nearbyTerrain.map((value: unknown) => normalizeText(String(value))) : [];
+  const knownItems = Array.isArray(req.body.knownItems) ? req.body.knownItems.map((value: unknown) => String(value)) : [];
+  const knownSkills = Array.isArray(req.body.knownSkills) ? req.body.knownSkills.map((value: unknown) => String(value).toUpperCase()) : [];
+  const snapshot = await getContentSnapshot();
+  const analysis = buildAnalysis(note, intent, nearbyTerrain, knownItems, knownSkills, snapshot);
+  const firstItem = analysis.proposals.find((proposal) => proposal.type === "item")?.item ?? null;
+  const firstSkill = analysis.proposals.find((proposal) => proposal.type === "skill")?.skill ?? null;
+  const firstRecipe = analysis.proposals.find((proposal) => proposal.type === "recipe")?.recipe ?? null;
 
   sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, {
     result: {
-      model: "frontier-discovery-rules-v1",
-      confidence: item || skill || recipe ? 0.82 : 0.41,
+      model: "frontier-discovery-rules-v2",
+      confidence: analysis.confidence,
       content: {
-        item,
-        skill,
-        recipe,
-        message: item
-          ? `The request appears to reference ${item.name}, which was not yet in the static content tables.`
-          : skill
-            ? `The request hints at a discoverable skill path through ${skill.name}.`
-            : "No clear new content target was inferred from that note."
-      }
+        item: firstItem,
+        skill: firstSkill,
+        recipe: firstRecipe,
+        message: analysis.message
+      },
+      proposals: analysis.proposals
     }
   });
 });

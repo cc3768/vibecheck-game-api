@@ -7,7 +7,7 @@ const app = createServiceApp(SERVICE_NAME);
 
 const history = new Map<string, Array<Record<string, unknown>>>();
 
-const SKILL_PREREQS: Record<string, string[]> = {
+const FALLBACK_SKILL_PREREQS: Record<string, string[]> = {
   GENERAL: [],
   SURVIVAL: ["GENERAL"],
   SOCIAL: ["GENERAL"],
@@ -33,7 +33,7 @@ const SKILL_PREREQS: Record<string, string[]> = {
   ALCHEMY: ["CRAFTING"]
 };
 
-const INTENT_SKILLS: Record<string, string[]> = {
+const FALLBACK_INTENT_SKILLS: Record<string, string[]> = {
   OBSERVE: ["GENERAL"],
   SCOUT: ["GENERAL", "EXPLORATION"],
   FORAGE: ["FORAGING", "SURVIVAL"],
@@ -55,7 +55,7 @@ const INTENT_SKILLS: Record<string, string[]> = {
   GENERAL: ["GENERAL"]
 };
 
-const ITEM_META: Record<string, { name: string; description: string }> = {
+const FALLBACK_ITEM_META: Record<string, { name: string; description: string }> = {
   unidentified_herb: { name: "Unidentified Herb", description: "A fresh plant you have not classified yet." },
   raw_herb: { name: "Raw Herb", description: "A loose herb fit for simple medicine or tea." },
   stem_fiber: { name: "Stem Fiber", description: "Tough plant fibers useful in primitive craft." },
@@ -87,13 +87,81 @@ const ITEM_META: Record<string, { name: string; description: string }> = {
   herbal_tea: { name: "Herbal Tea", description: "A basic brewed herb drink." }
 };
 
-const HERB_CATALOG = [
+const FALLBACK_HERB_CATALOG = [
   { key: "moonmint", weight: 2, terrain: ["forest", "grass"] },
   { key: "sunroot", weight: 1, terrain: ["grass", "sand"] },
   { key: "silverleaf", weight: 2, terrain: ["forest", "grass"] },
   { key: "bitterwort", weight: 1, terrain: ["rock", "grass"] },
   { key: "pine_needles", weight: 2, terrain: ["forest"] }
 ];
+
+type ContentSnapshot = {
+  items: Record<string, { name: string; description: string }>;
+  dynamicItems: Record<string, DynamicItemRecord>;
+  skills: Record<string, DynamicSkillRecord>;
+  skillPrereqs: Record<string, string[]>;
+  intentSkills: Record<string, string[]>;
+  herbCatalog: Array<{ key: string; weight: number; terrain: string[] }>;
+  discoveries: Array<Record<string, unknown>>;
+  aliases: Record<string, { canonicalType: string; canonicalKey: string; confidenceBoost?: number }>;
+  recipes: Record<string, RecipeRecord>;
+  source: string;
+};
+
+const contentCache: ContentSnapshot = {
+  items: { ...FALLBACK_ITEM_META },
+  dynamicItems: {},
+  skills: {},
+  skillPrereqs: { ...FALLBACK_SKILL_PREREQS },
+  intentSkills: { ...FALLBACK_INTENT_SKILLS },
+  herbCatalog: [...FALLBACK_HERB_CATALOG],
+  discoveries: [],
+  aliases: {},
+  recipes: {},
+  source: "seed"
+};
+let contentCacheAt = 0;
+
+async function ensureContentCache(force = false) {
+  const ttlMs = 30_000;
+  if (!force && Date.now() - contentCacheAt < ttlMs) return contentCache;
+  try {
+    const snapshot = await serviceFetch<ContentSnapshot>("content-system", "/api/v1/content/snapshot");
+    contentCache.items = { ...FALLBACK_ITEM_META, ...(snapshot.items ?? {}) };
+    contentCache.dynamicItems = snapshot.dynamicItems ?? {};
+    contentCache.skills = snapshot.skills ?? {};
+    contentCache.skillPrereqs = { ...FALLBACK_SKILL_PREREQS, ...(snapshot.skillPrereqs ?? {}) };
+    contentCache.intentSkills = { ...FALLBACK_INTENT_SKILLS, ...(snapshot.intentSkills ?? {}) };
+    contentCache.herbCatalog = snapshot.herbCatalog?.length ? snapshot.herbCatalog : [...FALLBACK_HERB_CATALOG];
+    contentCache.discoveries = snapshot.discoveries ?? [];
+    contentCache.aliases = snapshot.aliases ?? {};
+    contentCache.recipes = snapshot.recipes ?? {};
+    contentCache.source = snapshot.source ?? "seed";
+    contentCacheAt = Date.now();
+  } catch {
+    if (!contentCacheAt) contentCacheAt = Date.now();
+  }
+  return contentCache;
+}
+
+function itemMetaFor(itemKey: string) {
+  return contentCache.items[itemKey] ?? FALLBACK_ITEM_META[itemKey] ?? null;
+}
+
+function skillPrereqsFor(skill: string | null | undefined) {
+  const normalized = String(skill ?? "GENERAL").toUpperCase();
+  return contentCache.skillPrereqs[normalized] ?? FALLBACK_SKILL_PREREQS[normalized] ?? ["GENERAL"];
+}
+
+function intentSkillsFor(intent: string) {
+  const normalized = String(intent ?? "GENERAL").toUpperCase();
+  return contentCache.intentSkills[normalized] ?? FALLBACK_INTENT_SKILLS[normalized] ?? ["GENERAL"];
+}
+
+function herbCatalog() {
+  return contentCache.herbCatalog?.length ? contentCache.herbCatalog : FALLBACK_HERB_CATALOG;
+}
+
 
 type RecipeRecord = {
   recipeKey: string;
@@ -204,7 +272,7 @@ function titleCaseLocal(value: string) {
 }
 
 function inventoryLabel(itemKey: string) {
-  return ITEM_META[itemKey]?.name ?? titleCaseLocal(itemKey);
+  return itemMetaFor(itemKey)?.name ?? titleCaseLocal(itemKey);
 }
 
 function getSkillLevel(character: CharacterRecord, skill: string | null | undefined) {
@@ -225,8 +293,9 @@ function recipeMetaRecord(recipe: RecipeRecord | null | undefined) {
   if (!recipe) return {};
   const out: Record<string, { name: string; description: string }> = {};
   for (const output of recipe.outputs ?? []) {
-    if (ITEM_META[output.itemKey]) {
-      out[output.itemKey] = ITEM_META[output.itemKey];
+    const knownMeta = itemMetaFor(output.itemKey);
+    if (knownMeta) {
+      out[output.itemKey] = knownMeta;
     } else {
       out[output.itemKey] = { name: titleCaseLocal(output.itemKey), description: `A crafted item produced by ${recipe.name}.` };
     }
@@ -246,7 +315,7 @@ function mergeMetaMaps(...maps: Array<Record<string, { name: string; description
 async function discoverContent(note: string, intent: string, nearbyTerrain: string[], nearbyObjects: string[], character: CharacterRecord): Promise<DiscoveryRecord | null> {
   if (!note.trim()) return null;
   try {
-    const result = await serviceFetch<{ result?: { content?: DiscoveryRecord } }>("ai-system", "/api/v1/ai/discover-content", "POST", {
+    const analysis = await serviceFetch<{ result?: { proposals?: Array<Record<string, unknown>>; confidence?: number; target?: { text?: string; normalizedKey?: string; type?: string } } }>("ai-system", "/api/v1/ai/analyze-action", "POST", {
       note,
       intent,
       nearbyTerrain,
@@ -254,7 +323,19 @@ async function discoverContent(note: string, intent: string, nearbyTerrain: stri
       knownSkills: character.skills.map((entry) => entry.skill),
       knownItems: Object.keys((character as CharacterRecord & { inventory?: Record<string, number> }).inventory ?? {})
     });
-    return result?.result?.content ?? null;
+    const proposals = analysis?.result?.proposals ?? [];
+    if (!proposals.length) return null;
+    const resolved = await serviceFetch<{ content?: DiscoveryRecord }>("creation-system", "/api/v1/creation/resolve-proposals", "POST", {
+      note,
+      intent,
+      nearbyTerrain,
+      nearbyObjects,
+      primarySkill: character.skills[0]?.skill ?? "GENERAL",
+      knownSkills: character.skills.map((entry) => entry.skill),
+      knownItems: Object.keys((character as CharacterRecord & { inventory?: Record<string, number> }).inventory ?? {}),
+      proposals
+    });
+    return resolved?.content ?? null;
   } catch {
     return null;
   }
@@ -315,7 +396,7 @@ function randomPick<T>(items: T[]) {
 
 function canEverUseSkill(skill: string, available: Set<string>) {
   const normalized = String(skill || "GENERAL").toUpperCase();
-  const prereqs = SKILL_PREREQS[normalized] ?? ["GENERAL"];
+  const prereqs = skillPrereqsFor(normalized);
   return prereqs.every((entry) => available.has(entry));
 }
 
@@ -403,7 +484,7 @@ function categoryForIntent(intent: string) {
 }
 
 function requiredSkillsForIntent(intent: string, primarySkill: string, secondarySkill: string | null) {
-  const set = new Set<string>([...(INTENT_SKILLS[intent] ?? ["GENERAL"]), primarySkill]);
+  const set = new Set<string>([...intentSkillsFor(intent), primarySkill]);
   if (secondarySkill) set.add(secondarySkill);
   return Array.from(set).filter(Boolean);
 }
@@ -439,8 +520,8 @@ function pickHerb(note: string, nearbyTerrain: string[]) {
   if (upper.includes("BITTER")) return "bitterwort";
   if (upper.includes("PINE")) return "pine_needles";
 
-  const matches = HERB_CATALOG.filter((herb) => herb.terrain.some((terrain) => nearbyTerrain.includes(terrain)));
-  const pool = matches.length ? matches : HERB_CATALOG;
+  const matches = herbCatalog().filter((herb) => herb.terrain.some((terrain) => nearbyTerrain.includes(terrain)));
+  const pool = matches.length ? matches : herbCatalog();
   const weighted: string[] = [];
   for (const herb of pool) {
     for (let i = 0; i < herb.weight; i += 1) weighted.push(herb.key);
@@ -471,6 +552,7 @@ async function resolveRecipeForAction(character: CharacterRecord, plan: Omit<Act
 }
 
 async function buildPlan(character: CharacterRecord, rawAction: ActionDraft): Promise<ActionPlan> {
+  await ensureContentCache();
   const draft = parseDraft(rawAction);
   const intent = classifyIntent(draft);
   const category = categoryForIntent(intent);
@@ -484,7 +566,7 @@ async function buildPlan(character: CharacterRecord, rawAction: ActionDraft): Pr
     if (skill === "GENERAL") continue;
     if (!available.has(skill)) {
       if (!canEverUseSkill(skill, available)) {
-        const prereqs = SKILL_PREREQS[skill] ?? ["GENERAL"];
+        const prereqs = skillPrereqsFor(skill);
         reasons.push(`${skill} is not available from your current foundations. You still need ${prereqs.join(", ")}.`);
       }
     }
@@ -498,8 +580,8 @@ async function buildPlan(character: CharacterRecord, rawAction: ActionDraft): Pr
   if (["OBSERVE", "SCOUT", "FORAGE", "MINE", "CRAFT_RECIPE", "BUILD"].includes(intent) && draft.note) {
     discovery = await discoverContent(draft.note, intent, nearbyTerrain, nearbyObjects, character);
     const discoveredSkillKey = discovery?.skill?.skillKey ? String(discovery.skill.skillKey).toUpperCase() : null;
-    if (discoveredSkillKey && !SKILL_PREREQS[discoveredSkillKey]) {
-      SKILL_PREREQS[discoveredSkillKey] = [intent === "BUILD" ? "BUILDING" : intent === "CRAFT_RECIPE" ? "CRAFTING" : intent === "MINE" ? "MINING" : intent === "FORAGE" ? "FORAGING" : draft.primarySkill || "GENERAL"];
+    if (discoveredSkillKey && !contentCache.skillPrereqs[discoveredSkillKey]) {
+      contentCache.skillPrereqs[discoveredSkillKey] = [intent === "BUILD" ? "BUILDING" : intent === "CRAFT_RECIPE" ? "CRAFTING" : intent === "MINE" ? "MINING" : intent === "FORAGE" ? "FORAGING" : draft.primarySkill || "GENERAL"];
     }
     if (discovery?.item?.requiredTerrain?.length) {
       const matchesTerrain = discovery.item.requiredTerrain.some((terrain) => nearbyTerrain.includes(String(terrain).toLowerCase()));
@@ -644,7 +726,8 @@ function asConsumedList(delta: Record<string, number>) {
 function registerKnownMeta(delta: Record<string, number>) {
   const out: Record<string, { name: string; description: string }> = {};
   for (const key of Object.keys(delta)) {
-    if (ITEM_META[key]) out[key] = ITEM_META[key];
+    const meta = itemMetaFor(key);
+    if (meta) out[key] = meta;
   }
   return out;
 }
@@ -1276,7 +1359,7 @@ app.post("/api/v1/actions/resolve-queue", async (req, res) => {
       const newlyDiscoveredSkills: string[] = [];
       const discoverySkillKey = outcome.success && plan.discovery?.skill?.skillKey ? String(plan.discovery.skill.skillKey).toUpperCase() : null;
       if (discoverySkillKey && !simulated.skills.some((entry) => entry.skill === discoverySkillKey)) {
-        const prereqs = SKILL_PREREQS[discoverySkillKey] ?? [plan.primarySkill || "GENERAL"];
+        const prereqs = skillPrereqsFor(discoverySkillKey) ?? [plan.primarySkill || "GENERAL"];
         const foundations = discoveredSkills(simulated);
         if (prereqs.every((entry) => foundations.has(entry))) {
           simulated.skills.push({ skill: discoverySkillKey, xp: 0, level: 1 });

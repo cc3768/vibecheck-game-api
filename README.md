@@ -17,6 +17,8 @@ A TypeScript monorepo scaffold generated from your service map.
 - rewards-system (41740)
 - quest-system (41741)
 - ai-system (41742)
+- content-system (41743)
+- creation-system (41744)
 
 ## Quick start
 
@@ -27,9 +29,11 @@ npm run dev:all
 
 ## Notes
 
-- The gateway already forwards auth, action, dialogue, quest, and combat routes.
+- The gateway forwards gameplay routes plus content and creation endpoints.
 - Most state is in-memory so you can test flows immediately.
 - Shared contracts and helpers live in `packages/shared/src`.
+- Airtable-backed persistence is enabled for accounts, sessions, player presence, world regions, world tiles, world objects, and AI-generated content.
+- World storage is 3D-ready: region map uses 12x12 tiles and each region tile can resolve to a 12x12 detail grid (`z` supported, currently used as `0`).
 
 
 ## Install note

@@ -38,3 +38,49 @@ Content-Type: application/json
     }
   ]
 }
+
+### content snapshot through gateway
+GET http://localhost:41730/api/v1/content/snapshot
+
+### creation resolve through gateway
+POST http://localhost:41730/api/v1/creation/resolve-proposals
+Content-Type: application/json
+
+{
+  "intent": "MINE",
+  "primarySkill": "MINING",
+  "note": "mine some flint shards",
+  "nearbyTerrain": ["rock"],
+  "proposals": [
+    {
+      "type": "item",
+      "key": "flint_shard",
+      "name": "Flint Shard",
+      "description": "A sharp stone fragment.",
+      "confidence": 0.82,
+      "aliases": ["flint shard", "shard"]
+    }
+  ]
+}
+
+### world tile detail (3D-ready model, currently z=0)
+GET http://localhost:41730/api/v1/world/world_prime/region/starter_lowlands/tile/0/0/detail?size=12&z=0
+
+### multiplayer presence update
+POST http://localhost:41730/api/v1/world/presence/update
+Content-Type: application/json
+
+{
+  "characterId": "char_demo",
+  "accountId": "acc_demo",
+  "position": {
+    "worldId": "world_prime",
+    "regionId": "starter_lowlands",
+    "x": 1,
+    "y": 1,
+    "z": 0
+  }
+}
+
+### players currently visible in region
+GET http://localhost:41730/api/v1/world/presence/region/starter_lowlands?worldId=world_prime

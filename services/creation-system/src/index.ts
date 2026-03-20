@@ -1,4 +1,14 @@
-import { SERVICE_VERSION, createServiceApp, getRequestId, getServiceUrl, sendError, sendSuccess } from "../../../packages/shared/src/index";
+import {
+  SERVICE_VERSION,
+  airtableEnabled,
+  airtableEnsureTable,
+  airtableUpsertByField,
+  createServiceApp,
+  getRequestId,
+  getServiceUrl,
+  sendError,
+  sendSuccess
+} from "../../../packages/shared/src/index";
 
 type RecipeRecord = {
   recipeKey: string;
@@ -73,14 +83,10 @@ const app = createServiceApp(SERVICE_NAME);
 
 const STOPWORDS = new Set(["something", "anything", "everything", "there", "thing", "stuff", "item", "items", "world", "area", "place", "maybe", "could", "would", "should", "into", "from", "with", "using", "look", "search", "find", "gather", "collect", "make", "craft", "build", "shape", "prepare", "mine", "forage", "check", "common", "words"]);
 
-type AirtableConfig = { apiKey: string; baseId: string; tableItems: string; tableSkills: string; tableRecipes: string; tableDiscoveries: string; tableAliases: string };
+type AirtableConfig = { tableItems: string; tableSkills: string; tableRecipes: string; tableDiscoveries: string; tableAliases: string };
 function airtableConfig(): AirtableConfig | null {
-  const apiKey = process.env.AIRTABLE_API_KEY ?? "";
-  const baseId = process.env.AIRTABLE_BASE_ID ?? "";
-  if (!apiKey || !baseId) return null;
+  if (!airtableEnabled()) return null;
   return {
-    apiKey,
-    baseId,
     tableItems: process.env.AIRTABLE_TABLE_ITEMS ?? "Items",
     tableSkills: process.env.AIRTABLE_TABLE_SKILLS ?? "Skills",
     tableRecipes: process.env.AIRTABLE_TABLE_RECIPES ?? "Recipes",
@@ -160,15 +166,68 @@ function terrainMatches(requiredTerrain: string[] | undefined, nearbyTerrain: st
 }
 
 async function airtableCreate(tableName: string, fields: Record<string, unknown>) {
+  await airtableUpsertByField(tableName, "_fallbackKey", `${Date.now()}:${Math.random()}`, fields);
+}
+
+let creationTablesReady = false;
+async function ensureCreationTables() {
+  if (!airtableEnabled() || creationTablesReady) return;
   const cfg = airtableConfig();
-  if (!cfg) return null;
-  const response = await fetch(`https://api.airtable.com/v0/${cfg.baseId}/${encodeURIComponent(tableName)}`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${cfg.apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ records: [{ fields }] })
-  });
-  if (!response.ok) throw new Error(`Airtable create failed for ${tableName} with ${response.status}`);
-  return response.json();
+  if (!cfg) return;
+
+  await Promise.all([
+    airtableEnsureTable(cfg.tableItems, [
+      { name: "itemKey", type: "singleLineText" },
+      { name: "name", type: "singleLineText" },
+      { name: "description", type: "multilineText" },
+      { name: "category", type: "singleLineText" },
+      { name: "preferredSkills", type: "multilineText" },
+      { name: "requiredTerrain", type: "multilineText" },
+      { name: "synonyms", type: "multilineText" },
+      { name: "discoverable", type: "checkbox" },
+      { name: "status", type: "singleLineText" }
+    ]),
+    airtableEnsureTable(cfg.tableSkills, [
+      { name: "skillKey", type: "singleLineText" },
+      { name: "name", type: "singleLineText" },
+      { name: "description", type: "multilineText" },
+      { name: "unlockHint", type: "multilineText" },
+      { name: "prereqs", type: "multilineText" },
+      { name: "discoverable", type: "checkbox" },
+      { name: "status", type: "singleLineText" }
+    ]),
+    airtableEnsureTable(cfg.tableRecipes, [
+      { name: "recipeKey", type: "singleLineText" },
+      { name: "name", type: "singleLineText" },
+      { name: "inputsJson", type: "multilineText" },
+      { name: "outputsJson", type: "multilineText" },
+      { name: "toolsJson", type: "multilineText" },
+      { name: "station", type: "singleLineText" },
+      { name: "keywords", type: "multilineText" }
+    ]),
+    airtableEnsureTable(cfg.tableDiscoveries, [
+      { name: "discoveryKey", type: "singleLineText" },
+      { name: "type", type: "singleLineText" },
+      { name: "targetKey", type: "singleLineText" },
+      { name: "aliases", type: "multilineText" },
+      { name: "reason", type: "multilineText" },
+      { name: "terrainRules", type: "multilineText" },
+      { name: "intentRules", type: "multilineText" },
+      { name: "confidenceMin", type: "number", options: { precision: 2 } },
+      { name: "autoCreate", type: "checkbox" },
+      { name: "status", type: "singleLineText" },
+      { name: "skillKey", type: "singleLineText" },
+      { name: "recipeKey", type: "singleLineText" }
+    ]),
+    airtableEnsureTable(cfg.tableAliases, [
+      { name: "alias", type: "singleLineText" },
+      { name: "canonicalType", type: "singleLineText" },
+      { name: "canonicalKey", type: "singleLineText" },
+      { name: "confidenceBoost", type: "number", options: { precision: 2 } }
+    ])
+  ]);
+
+  creationTablesReady = true;
 }
 
 async function persistRuntime(record: { item?: DynamicItemRecord | null; skill?: DynamicSkillRecord | null; recipe?: RecipeRecord | null; aliases?: string[]; discovery?: ContentSnapshot["discoveries"][number] | null }) {
@@ -205,8 +264,9 @@ async function persistIfNeeded(item: DynamicItemRecord | null, skill: DynamicSki
   const discovery = buildDiscoveryRecord(item, skill, recipe, message, aliases, intent, nearbyTerrain, confidence);
   const cfg = airtableConfig();
   if (cfg) {
+    await ensureCreationTables();
     if (item) {
-      await airtableCreate(cfg.tableItems, {
+      await airtableUpsertByField(cfg.tableItems, "itemKey", item.itemKey, {
         itemKey: item.itemKey,
         name: item.name,
         description: item.description,
@@ -219,7 +279,7 @@ async function persistIfNeeded(item: DynamicItemRecord | null, skill: DynamicSki
       });
     }
     if (skill) {
-      await airtableCreate(cfg.tableSkills, {
+      await airtableUpsertByField(cfg.tableSkills, "skillKey", skill.skillKey, {
         skillKey: skill.skillKey,
         name: skill.name,
         description: skill.description,
@@ -230,7 +290,7 @@ async function persistIfNeeded(item: DynamicItemRecord | null, skill: DynamicSki
       });
     }
     if (recipe) {
-      await airtableCreate(cfg.tableRecipes, {
+      await airtableUpsertByField(cfg.tableRecipes, "recipeKey", recipe.recipeKey, {
         recipeKey: recipe.recipeKey,
         name: recipe.name,
         inputsJson: JSON.stringify(recipe.inputs ?? []),
@@ -240,7 +300,7 @@ async function persistIfNeeded(item: DynamicItemRecord | null, skill: DynamicSki
         keywords: recipe.keywords ?? []
       });
     }
-    await airtableCreate(cfg.tableDiscoveries, {
+    await airtableUpsertByField(cfg.tableDiscoveries, "discoveryKey", discovery.discoveryKey, {
       discoveryKey: discovery.discoveryKey,
       type: discovery.type,
       targetKey: discovery.targetKey,
@@ -255,10 +315,17 @@ async function persistIfNeeded(item: DynamicItemRecord | null, skill: DynamicSki
       recipeKey: recipe?.recipeKey
     });
     for (const alias of aliases) {
-      await airtableCreate(cfg.tableAliases, { alias, canonicalType: discovery.type, canonicalKey: discovery.targetKey, confidenceBoost: 0.18 });
+      await airtableUpsertByField(cfg.tableAliases, "alias", alias, {
+        alias,
+        canonicalType: discovery.type,
+        canonicalKey: discovery.targetKey,
+        confidenceBoost: 0.18
+      });
     }
+    return "airtable" as const;
   } else {
     await persistRuntime({ item, skill, recipe, aliases, discovery });
+    return "runtime" as const;
   }
 }
 
@@ -314,8 +381,8 @@ app.post("/api/v1/creation/resolve-proposals", async (req, res) => {
           continue;
         }
         item = candidate;
-        await persistIfNeeded(item, null, null, aliasCandidates, intent, nearbyTerrain, confidence, proposal.reason ?? `Created from action note: ${note}`);
-        resolutions.push({ type: "item", key: item.itemKey, status: airtableConfig() ? "created_airtable" : "created_runtime" });
+        const persistedIn = await persistIfNeeded(item, null, null, aliasCandidates, intent, nearbyTerrain, confidence, proposal.reason ?? `Created from action note: ${note}`);
+        resolutions.push({ type: "item", key: item.itemKey, status: persistedIn === "airtable" ? "created_airtable" : "created_runtime" });
       }
 
       if (proposal.type === "skill" && !skill) {
@@ -337,8 +404,8 @@ app.post("/api/v1/creation/resolve-proposals", async (req, res) => {
         };
         const confidence = Number(proposal.confidence ?? 0.5);
         skill = candidate;
-        await persistIfNeeded(null, skill, null, [skill.name, skill.skillKey], intent, nearbyTerrain, confidence, proposal.reason ?? `Created from action note: ${note}`);
-        resolutions.push({ type: "skill", key: skill.skillKey, status: airtableConfig() ? "created_airtable" : "created_runtime" });
+        const persistedIn = await persistIfNeeded(null, skill, null, [skill.name, skill.skillKey], intent, nearbyTerrain, confidence, proposal.reason ?? `Created from action note: ${note}`);
+        resolutions.push({ type: "skill", key: skill.skillKey, status: persistedIn === "airtable" ? "created_airtable" : "created_runtime" });
       }
 
       if (proposal.type === "recipe" && !recipe) {
@@ -351,8 +418,8 @@ app.post("/api/v1/creation/resolve-proposals", async (req, res) => {
         }
         const confidence = Number(proposal.confidence ?? 0.5);
         recipe = candidate;
-        await persistIfNeeded(null, null, recipe, [recipe.name, recipe.recipeKey], intent, nearbyTerrain, confidence, proposal.reason ?? `Created from action note: ${note}`);
-        resolutions.push({ type: "recipe", key: recipe.recipeKey, status: airtableConfig() ? "created_airtable" : "created_runtime" });
+        const persistedIn = await persistIfNeeded(null, null, recipe, [recipe.name, recipe.recipeKey], intent, nearbyTerrain, confidence, proposal.reason ?? `Created from action note: ${note}`);
+        resolutions.push({ type: "recipe", key: recipe.recipeKey, status: persistedIn === "airtable" ? "created_airtable" : "created_runtime" });
       }
     }
 

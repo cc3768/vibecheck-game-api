@@ -8,7 +8,7 @@
     "services/*"
   ],
   "scripts": {
-    "dev:all": "concurrently -n client,login,chat,world,character,xp,action,production,combat,npc,rewards,quest,ai \"npm run dev:client-server\" \"npm run dev:login-system\" \"npm run dev:chat-system\" \"npm run dev:world-system\" \"npm run dev:character-system\" \"npm run dev:xp-system\" \"npm run dev:action-system\" \"npm run dev:production-system\" \"npm run dev:combat-system\" \"npm run dev:npc-system\" \"npm run dev:rewards-system\" \"npm run dev:quest-system\" \"npm run dev:ai-system\"",
+    "dev:all": "concurrently -n client,login,chat,world,character,xp,action,production,combat,npc,rewards,quest,ai,content,creation \"npm run dev:client-server\" \"npm run dev:login-system\" \"npm run dev:chat-system\" \"npm run dev:world-system\" \"npm run dev:character-system\" \"npm run dev:xp-system\" \"npm run dev:action-system\" \"npm run dev:production-system\" \"npm run dev:combat-system\" \"npm run dev:npc-system\" \"npm run dev:rewards-system\" \"npm run dev:quest-system\" \"npm run dev:ai-system\" \"npm run dev:content-system\" \"npm run dev:creation-system\"",
     "dev:client-server": "tsx services/client-server/src/index.ts",
     "dev:login-system": "tsx services/login-system/src/index.ts",
     "dev:chat-system": "tsx services/chat-system/src/index.ts",
@@ -22,6 +22,8 @@
     "dev:rewards-system": "tsx services/rewards-system/src/index.ts",
     "dev:quest-system": "tsx services/quest-system/src/index.ts",
     "dev:ai-system": "tsx services/ai-system/src/index.ts",
+    "dev:content-system": "tsx services/content-system/src/index.ts",
+    "dev:creation-system": "tsx services/creation-system/src/index.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

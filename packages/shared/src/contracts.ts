@@ -103,6 +103,7 @@ export interface CharacterRecord {
   position: WorldPosition;
   stats: Record<string, number>;
   vitals: Record<string, number>;
+  inventory: Record<ItemKey, number>;
   skills: Array<{ skill: SkillKey; level: number; xp: number }>;
   knowledge: { unlockedTopics: string[]; unlockedRecipes: RecipeKey[]; discoveredWorlds?: WorldId[]; lastSavedAt?: ISODateString };
   createdAt: ISODateString;

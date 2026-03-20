@@ -648,6 +648,7 @@ async function buildPlan(character: CharacterRecord, rawAction: ActionDraft): Pr
       nearbyTerrain,
       nearbyObjects,
       discoveredSkills: Array.from(available),
+      discovery,
       requiredSkills
     });
 

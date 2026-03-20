@@ -112,6 +112,12 @@ app.get("/api/v1/session/me", asyncRoute(async (req, res) => {
   res.status(result.status).json(result.json);
 }));
 
+app.get("/api/v1/session/active-players/:regionId", asyncRoute(async (req, res) => {
+  const query = new URLSearchParams({ worldId: String(req.query.worldId ?? "world_prime") });
+  const result = await forward("login-system", `/api/v1/auth/active-players/${req.params.regionId}?${query.toString()}`, "GET", getRequestId(req));
+  res.status(result.status).json(result.json);
+}));
+
 app.post("/api/v1/character/create", asyncRoute(async (req, res) => {
   const result = await forward("character-system", "/api/v1/character/create", "POST", getRequestId(req), req.body);
   res.status(result.status).json(result.json);
@@ -152,6 +158,17 @@ app.get("/api/v1/world/spawn/:characterId", asyncRoute(async (req, res) => {
   res.status(result.status).json(result.json);
 }));
 
+app.post("/api/v1/world/presence/update", asyncRoute(async (req, res) => {
+  const result = await forward("world-system", "/api/v1/world/presence/update", "POST", getRequestId(req), req.body);
+  res.status(result.status).json(result.json);
+}));
+
+app.get("/api/v1/world/presence/region/:regionId", asyncRoute(async (req, res) => {
+  const query = new URLSearchParams({ worldId: String(req.query.worldId ?? "world_prime") });
+  const result = await forward("world-system", `/api/v1/world/presence/region/${req.params.regionId}?${query.toString()}`, "GET", getRequestId(req));
+  res.status(result.status).json(result.json);
+}));
+
 app.get("/api/v1/world/:worldId/region/:regionId", asyncRoute(async (req, res) => {
   const result = await forward("world-system", `/api/v1/world/${req.params.worldId}/region/${req.params.regionId}`, "GET", getRequestId(req));
   res.status(result.status).json(result.json);
@@ -175,6 +192,20 @@ app.get("/api/v1/world/:worldId/chunk", asyncRoute(async (req, res) => {
     size: String(req.query.size ?? 12)
   });
   const result = await forward("world-system", `/api/v1/world/${req.params.worldId}/chunk?${query.toString()}`, "GET", getRequestId(req));
+  res.status(result.status).json(result.json);
+}));
+
+app.get("/api/v1/world/:worldId/region/:regionId/tile/:tileX/:tileY/detail", asyncRoute(async (req, res) => {
+  const query = new URLSearchParams({
+    size: String(req.query.size ?? 12),
+    z: String(req.query.z ?? 0)
+  });
+  const result = await forward(
+    "world-system",
+    `/api/v1/world/${req.params.worldId}/region/${req.params.regionId}/tile/${req.params.tileX}/${req.params.tileY}/detail?${query.toString()}`,
+    "GET",
+    getRequestId(req)
+  );
   res.status(result.status).json(result.json);
 }));
 
@@ -375,6 +406,32 @@ app.post("/api/v1/ai/discover-content", asyncRoute(async (req, res) => {
 
 app.get("/api/v1/ai/prompt-template/:templateKey", asyncRoute(async (req, res) => {
   const result = await forward("ai-system", `/api/v1/ai/prompt-template/${req.params.templateKey}`, "GET", getRequestId(req));
+  res.status(result.status).json(result.json);
+}));
+
+app.get("/api/v1/content/snapshot", asyncRoute(async (req, res) => {
+  const force = String(req.query.force ?? "") === "1" ? "?force=1" : "";
+  const result = await forward("content-system", `/api/v1/content/snapshot${force}`, "GET", getRequestId(req));
+  res.status(result.status).json(result.json);
+}));
+
+app.get("/api/v1/content/discoveries", asyncRoute(async (req, res) => {
+  const result = await forward("content-system", "/api/v1/content/discoveries", "GET", getRequestId(req));
+  res.status(result.status).json(result.json);
+}));
+
+app.get("/api/v1/content/items/:itemKey", asyncRoute(async (req, res) => {
+  const result = await forward("content-system", `/api/v1/content/items/${req.params.itemKey}`, "GET", getRequestId(req));
+  res.status(result.status).json(result.json);
+}));
+
+app.post("/api/v1/content/find-alias", asyncRoute(async (req, res) => {
+  const result = await forward("content-system", "/api/v1/content/find-alias", "POST", getRequestId(req), req.body);
+  res.status(result.status).json(result.json);
+}));
+
+app.post("/api/v1/creation/resolve-proposals", asyncRoute(async (req, res) => {
+  const result = await forward("creation-system", "/api/v1/creation/resolve-proposals", "POST", getRequestId(req), req.body);
   res.status(result.status).json(result.json);
 }));
 

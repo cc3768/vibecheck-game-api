@@ -25,7 +25,9 @@ export const SERVICES = [
   { name: "npc-system", port: Number(process.env.NPC_SYSTEM_PORT ?? 41739) },
   { name: "rewards-system", port: Number(process.env.REWARDS_SYSTEM_PORT ?? 41740) },
   { name: "quest-system", port: Number(process.env.QUEST_SYSTEM_PORT ?? 41741) },
-  { name: "ai-system", port: Number(process.env.AI_SYSTEM_PORT ?? 41742) }
+  { name: "ai-system", port: Number(process.env.AI_SYSTEM_PORT ?? 41742) },
+  { name: "content-system", port: Number(process.env.CONTENT_SYSTEM_PORT ?? 41743) },
+  { name: "creation-system", port: Number(process.env.CREATION_SYSTEM_PORT ?? 41744) }
 ] as const;
 
 export function getServicePort(serviceName: string): number {

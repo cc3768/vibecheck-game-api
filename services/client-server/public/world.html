@@ -20,8 +20,6 @@
             <div class="mini-chip status-inline-chip"><span>Region</span><strong id="region-chip">—</strong></div>
             <div class="mini-chip status-inline-chip"><span>Chunk</span><strong id="chunk-chip">0,0</strong></div>
             <div class="mini-chip status-inline-chip"><span>Tile</span><strong id="coord-chip">0,0</strong></div>
-            <div class="mini-chip status-inline-chip"><span>Players</span><strong id="player-presence-pill">0 nearby</strong></div>
-            <div class="mini-chip status-inline-chip"><span>Data</span><strong id="data-source-chip">Checking…</strong></div>
           </div>
           <div class="button-row wrap">
             <button id="back-to-hub-btn" class="secondary">Back to Hub</button>
@@ -38,6 +36,8 @@
             <div class="button-row wrap">
               <span class="tiny-label" id="map-level-pill">Region map</span>
               <span class="tiny-label" id="world-status-pill">Loading…</span>
+              <span class="tiny-label" id="data-source-chip">Data: Loading…</span>
+              <span class="tiny-label" id="player-presence-pill">Players: 0 nearby</span>
             </div>
           </div>
           <div class="scene-title" id="scene-title">Loading region…</div>
@@ -75,7 +75,7 @@
               <div class="scene-block compact-block">
                 <span class="block-label">Detailed Tile View</span>
                 <div id="detail-summary" class="block-copy">Enter a tile to inspect the local ground inside that region tile.</div>
-                <div id="selected-tile-players" class="small-copy muted">No other players on this tile.</div>
+                <div id="selected-tile-players" class="muted small-copy">No other players on this tile.</div>
               </div>
               <div class="scene-block compact-block">
                 <span class="block-label">Resources Nearby</span>
@@ -122,9 +122,9 @@
           <section class="panel action-panel ai-action-panel cleaned-action-panel">
             <div class="panel-title-row">
               <h2>AI Action Menu</h2>
-              <span class="tiny-label" id="action-mode-pill">Queue ready</span>
+              <span class="tiny-label" id="action-mode-pill">Instant submit</span>
             </div>
-            <p class="muted small-copy">Action checks now run automatically 2.5 seconds after you stop typing. Use guide questions when the player needs direction.</p>
+            <p class="muted small-copy">Action checks now run automatically 2.5 seconds after you stop typing. Submitted actions resolve immediately instead of waiting in a queue.</p>
             <div class="scene-block compact-block guide-block">
               <span class="block-label">Player Questions</span>
               <div class="guide-question-grid">
@@ -150,18 +150,18 @@
             </div>
             <div class="button-row wrap">
               <button id="analyze-action-btn" class="secondary">Check Now</button>
-              <button id="queue-action-btn">Queue Action</button>
-              <button id="run-action-btn">Run Queue</button>
-              <button id="clear-action-queue-btn" class="ghost">Clear</button>
+              <button id="queue-action-btn">Submit Action</button>
+              <button id="run-action-btn" class="ghost" disabled>Run Pending</button>
+              <button id="clear-action-queue-btn" class="ghost">Clear Pending</button>
             </div>
             <div id="action-analysis-box" class="dialogue-box">Action analysis will appear here.</div>
             <div class="scene-block compact-block">
-              <span class="block-label">Queued Actions</span>
-              <div id="action-queue-box" class="stack-list compact empty-state">No queued actions.</div>
+              <span class="block-label">Pending Actions</span>
+              <div id="action-queue-box" class="stack-list compact empty-state">Actions submit immediately now.</div>
             </div>
             <div class="scene-block compact-block">
-              <span class="block-label">Queue Results</span>
-              <div id="action-results-box" class="stack-list compact empty-state">Run the queue to see outcomes, rewards, failures, and inventory changes.</div>
+              <span class="block-label">Action Results</span>
+              <div id="action-results-box" class="stack-list compact empty-state">Submit an action to see outcomes, rewards, failures, and inventory changes.</div>
             </div>
           </section>
         </aside>

@@ -26,6 +26,11 @@ let contentSnapshot = null;
 let autoAnalyzeTimer = null;
 let lastPreview = null;
 let actionQueue = Array.isArray(profile.actionQueue) ? profile.actionQueue : [];
+
+function persistActionQueue() {
+  profile.actionQueue = actionQueue;
+  saveProfile(profile);
+}
 let itemMeta = loadItemMeta();
 
 let worldState = {
@@ -39,10 +44,18 @@ let worldState = {
   questOffer: null,
   lastDialogue: "No dialogue yet.",
   promptRules: null,
-  lastActionResults: []
+  lastActionResults: [],
+  npcsLoaded: false,
+  presenceLoaded: false
 };
 
 const ITEM_META_KEY = "vibecheck.itemmeta.v1";
+const WORLD_CACHE_PREFIX = "vibecheck.worldcache.v1";
+const CACHE_TTLS = {
+  contentSnapshot: 60_000,
+  promptRules: 300_000
+};
+let backgroundRefreshToken = 0;
 
 function ensureProfileDefaults() {
   profile.mapMode = profile.mapMode === "detail" ? "detail" : "region";
@@ -51,6 +64,62 @@ function ensureProfileDefaults() {
   saveProfile(profile);
 }
 ensureProfileDefaults();
+
+function setText(id, value) {
+  const element = $(id);
+  if (element) element.textContent = value;
+  return element;
+}
+
+function setHTML(id, value) {
+  const element = $(id);
+  if (element) element.innerHTML = value;
+  return element;
+}
+
+function setDisabled(id, value) {
+  const element = $(id);
+  if (element) element.disabled = Boolean(value);
+  return element;
+}
+
+function cacheKey(name) {
+  return `${WORLD_CACHE_PREFIX}.${name}`;
+}
+
+function readTimedCache(name, ttlMs) {
+  try {
+    const raw = localStorage.getItem(cacheKey(name));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    if (!parsed.at || Date.now() - Number(parsed.at) > ttlMs) return null;
+    return parsed.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeTimedCache(name, value) {
+  try {
+    localStorage.setItem(cacheKey(name), JSON.stringify({ at: Date.now(), value }));
+  } catch {
+    // ignore cache write issues
+  }
+}
+
+function mergeSheetCore(character, stats) {
+  if (!character && !stats) return;
+  sheet = {
+    ...sheet,
+    character: character || sheet.character,
+    stats: stats || sheet.stats,
+    vitals: stats?.vitals || sheet.vitals,
+    inventory: character?.inventory || stats?.inventory || sheet.inventory || {},
+    discoveredWorlds: character?.discoveredWorlds || sheet.discoveredWorlds || ["world_prime"]
+  };
+}
+
 
 function loadItemMeta() {
   try {
@@ -114,8 +183,41 @@ function selectedDetailCell() {
   return detailCellAt(cell.x, cell.y);
 }
 
+function normalizeNpcRecord(raw, fallbackKey = null) {
+  if (!raw || typeof raw !== "object") return null;
+  const npcId = String(raw.npcId || raw.id || fallbackKey || raw.name || "unknown_npc");
+  const roleType = raw.role?.roleType || raw.role?.type || raw.roleType || raw.job || raw.profession || "wanderer";
+  return {
+    ...raw,
+    npcId,
+    name: String(raw.name || raw.displayName || titleCase(npcId.replace(/^npc[_-]?/i, "")) || "Unknown NPC"),
+    regionId: String(raw.regionId || currentScene().regionId),
+    role: (raw.role && typeof raw.role === "object")
+      ? { ...raw.role, roleType: String(raw.role.roleType || raw.role.type || roleType) }
+      : { roleType: String(roleType) }
+  };
+}
+
+function normalizeNpcList(input) {
+  if (Array.isArray(input)) {
+    return input.map((npc, index) => normalizeNpcRecord(npc, `npc_${index + 1}`)).filter(Boolean);
+  }
+  if (!input || typeof input !== "object") return [];
+  if (Array.isArray(input.npcs)) return normalizeNpcList(input.npcs);
+  if (Array.isArray(input.items)) return normalizeNpcList(input.items);
+  if (Array.isArray(input.entries)) return normalizeNpcList(input.entries);
+  if (Array.isArray(input.nearby)) return normalizeNpcList(input.nearby);
+
+  return Object.entries(input).flatMap(([key, value]) => {
+    if (Array.isArray(value)) return normalizeNpcList(value);
+    const normalized = normalizeNpcRecord(value, key);
+    return normalized ? [normalized] : [];
+  });
+}
+
 function selectedNpc() {
-  return worldState.nearbyNpcs.find((npc) => npc.npcId === worldState.selectedNpcId) || null;
+  const npcList = Array.isArray(worldState.nearbyNpcs) ? worldState.nearbyNpcs : normalizeNpcList(worldState.nearbyNpcs);
+  return npcList.find((npc) => npc.npcId === worldState.selectedNpcId) || null;
 }
 
 function objectsOnTile(x, y) {
@@ -370,6 +472,105 @@ function pseudo(seed) {
   return value - Math.floor(value);
 }
 
+function baseTerrainForCoord(regionId, x, y) {
+  const regionKey = String(regionId || currentScene().regionId || "starter_lowlands");
+  const seed = x * 92821 + y * 68917 + regionKey.length * 197;
+  const noise = pseudo(seed);
+  if (regionKey === "whisper_woods") {
+    if (noise > 0.82) return "water";
+    if (noise > 0.3) return "forest";
+    return noise > 0.12 ? "grass" : "rock";
+  }
+  if (noise > 0.9) return "water";
+  if (noise > 0.72) return "forest";
+  if (noise > 0.16) return "grass";
+  return "rock";
+}
+
+function normalizeTileEntry(tile, fallback = {}) {
+  const x = Number(tile?.x ?? tile?.tileX ?? tile?.worldX ?? tile?.col ?? fallback.x ?? 0);
+  const y = Number(tile?.y ?? tile?.tileY ?? tile?.worldY ?? tile?.row ?? fallback.y ?? 0);
+  const kind = String(tile?.kind ?? tile?.terrain ?? tile?.type ?? fallback.kind ?? "grass");
+  const blocked = tile?.blocked === true || tile?.passable === false;
+  const walkable = tile?.walkable !== false && !blocked && kind !== "void";
+  return {
+    x,
+    y,
+    kind,
+    walkable,
+    elevation: Number(tile?.elevation ?? 0),
+    source: String(tile?.source || fallback.source || "world-system")
+  };
+}
+
+function sortTilesForGrid(tiles) {
+  return tiles.slice().sort((a, b) => a.y - b.y || a.x - b.x);
+}
+
+function buildFallbackChunk(scene, chunkMeta, payload = {}) {
+  const size = Number(payload?.size ?? chunkMeta?.size ?? CHUNK_SIZE) || CHUNK_SIZE;
+  const originX = Number(payload?.originX ?? chunkMeta?.chunkX * size ?? 0);
+  const originY = Number(payload?.originY ?? chunkMeta?.chunkY * size ?? 0);
+  const regionId = String(scene?.regionId || currentScene().regionId);
+  const tiles = [];
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const worldX = originX + x;
+      const worldY = originY + y;
+      const kind = baseTerrainForCoord(regionId, worldX, worldY);
+      tiles.push({
+        x: worldX,
+        y: worldY,
+        kind,
+        walkable: kind !== "water" || pseudo(worldX * 13 + worldY * 17) > 0.35,
+        source: "client-fallback"
+      });
+    }
+  }
+  return {
+    chunkX: Number(chunkMeta?.chunkX ?? 0),
+    chunkY: Number(chunkMeta?.chunkY ?? 0),
+    size,
+    originX,
+    originY,
+    source: "client-fallback",
+    sourceLabel: "Map fallback",
+    tiles: sortTilesForGrid(tiles),
+    objects: Array.isArray(payload?.objects) ? payload.objects : []
+  };
+}
+
+function normalizeChunkPayload(scene, chunkMeta, payload) {
+  const rawChunk = payload?.chunk || payload?.data?.chunk || payload || {};
+  const rawTiles = Array.isArray(rawChunk?.tiles)
+    ? rawChunk.tiles
+    : Array.isArray(rawChunk?.cells)
+      ? rawChunk.cells
+      : Array.isArray(rawChunk?.grid)
+        ? rawChunk.grid.flatMap((row, rowIndex) => row.map((cell, colIndex) => ({ ...cell, row: rowIndex, col: colIndex })))
+        : [];
+  if (!rawTiles.length) return buildFallbackChunk(scene, chunkMeta, rawChunk);
+  const size = Number(rawChunk?.size ?? rawChunk?.width ?? rawChunk?.chunkSize ?? chunkMeta?.size ?? CHUNK_SIZE) || CHUNK_SIZE;
+  const originX = Number(rawChunk?.originX ?? rawChunk?.minX ?? chunkMeta?.chunkX * size ?? 0);
+  const originY = Number(rawChunk?.originY ?? rawChunk?.minY ?? chunkMeta?.chunkY * size ?? 0);
+  const tiles = sortTilesForGrid(rawTiles.map((tile, index) => normalizeTileEntry(tile, {
+    x: originX + (index % size),
+    y: originY + Math.floor(index / size),
+    source: rawChunk?.source || "world-system"
+  })));
+  return {
+    chunkX: Number(rawChunk?.chunkX ?? chunkMeta?.chunkX ?? 0),
+    chunkY: Number(rawChunk?.chunkY ?? chunkMeta?.chunkY ?? 0),
+    size,
+    originX,
+    originY,
+    source: String(rawChunk?.source || "world-system"),
+    sourceLabel: rawChunk?.sourceLabel || (String(rawChunk?.source || "world-system") === "client-fallback" ? "Map fallback" : "Live world"),
+    tiles,
+    objects: Array.isArray(rawChunk?.objects) ? rawChunk.objects : []
+  };
+}
+
 function detailKindFor(tile, x, y) {
   const base = String(tile?.kind || "grass");
   const seed = tile.x * 7349 + tile.y * 9151 + x * 131 + y * 197;
@@ -431,6 +632,7 @@ function normalizeDetailPayload(tile, payload) {
   };
 }
 
+
 async function loadHero() {
   characters = await loadCharacters(session.accountId);
   hero = selectedCharacter(characters, profile);
@@ -440,54 +642,180 @@ async function loadHero() {
   }
 }
 
-async function syncSheet() {
-  sheet = await hydrateCharacterSheet(hero.characterId);
-  if (sheet?.knowledge?.generatedItemMeta) mergeItemMeta(sheet.knowledge.generatedItemMeta);
+async function syncSheetCore() {
+  const bust = `ts=${Date.now()}`;
+  const [characterResult, statsResult] = await Promise.allSettled([
+    api(`/api/v1/character/${hero.characterId}?${bust}`),
+    api(`/api/v1/character/${hero.characterId}/stats?${bust}`)
+  ]);
+
+  const character = characterResult.status === "fulfilled" ? (characterResult.value?.data?.character || null) : null;
+  const stats = statsResult.status === "fulfilled"
+    ? (statsResult.value?.data?.stats || { vitals: statsResult.value?.data?.vitals || null, inventory: statsResult.value?.data?.inventory || null })
+    : null;
+
+  mergeSheetCore(character, stats);
   populateSkillSelects();
 }
 
-async function loadQuest() {
-  const json = await api(`/api/v1/quest/active/${hero.characterId}`);
-  worldState.activeQuest = json?.data?.active?.[0] || null;
+async function syncSheetExtras() {
+  const bust = `ts=${Date.now()}`;
+  const [skillsResult, knowledgeResult] = await Promise.allSettled([
+    api(`/api/v1/character/${hero.characterId}/skills?${bust}`),
+    api(`/api/v1/character/${hero.characterId}/knowledge?${bust}`)
+  ]);
+
+  if (skillsResult.status === "fulfilled") {
+    sheet.skills = skillsResult.value?.data?.skills || [];
+  }
+  if (knowledgeResult.status === "fulfilled") {
+    sheet.knowledge = knowledgeResult.value?.data?.knowledge || null;
+    if (sheet?.knowledge?.generatedItemMeta) mergeItemMeta(sheet.knowledge.generatedItemMeta);
+  }
+  populateSkillSelects();
 }
 
-async function loadPromptRules() {
-  const json = await api("/api/v1/ai/prompt-template/npc_dialogue_rules");
-  worldState.promptRules = json?.data?.rules || null;
+async function syncSheet() {
+  await syncSheetCore();
+  await syncSheetExtras();
+}
+
+async function loadQuest() {
+  try {
+    const json = await api(`/api/v1/quest/active/${hero.characterId}`);
+    worldState.activeQuest = json?.data?.active?.[0] || null;
+  } catch {
+    worldState.activeQuest = null;
+  }
+}
+
+async function loadPromptRules(force = false) {
+  const cached = !force ? readTimedCache("promptRules", CACHE_TTLS.promptRules) : null;
+  if (cached) {
+    worldState.promptRules = cached;
+    return cached;
+  }
+  try {
+    const json = await api("/api/v1/ai/prompt-template/npc_dialogue_rules");
+    worldState.promptRules = json?.data?.rules || null;
+    if (worldState.promptRules) writeTimedCache("promptRules", worldState.promptRules);
+    return worldState.promptRules;
+  } catch {
+    if (!cached) worldState.promptRules = null;
+    return worldState.promptRules;
+  }
 }
 
 async function refreshContentSource(force = false) {
+  const cached = !force ? readTimedCache("contentSnapshot", CACHE_TTLS.contentSnapshot) : null;
+  if (cached) {
+    contentSnapshot = cached;
+    return cached;
+  }
   try {
     contentSnapshot = await loadContentSnapshot(force);
+    if (contentSnapshot) writeTimedCache("contentSnapshot", contentSnapshot);
+    return contentSnapshot;
   } catch {
-    contentSnapshot = null;
+    if (!cached) contentSnapshot = null;
+    return contentSnapshot;
   }
 }
+
 
 async function ensureWorldPosition() {
-  if (!profile.scene?.worldId || !profile.scene?.regionId) {
+  if (profile.scene?.worldId && profile.scene?.regionId) return;
+  try {
     const json = await api(`/api/v1/world/spawn/${hero.characterId}`);
-    setScene(json?.data?.position);
+    if (json?.data?.position) {
+      setScene(json.data.position);
+      return;
+    }
+  } catch {
+    // fall back to local region metadata below
   }
+  setScene(regionMeta().position || REGION_META.starter_lowlands.position);
 }
 
-async function hydrateWorld() {
-  const scene = currentScene();
-  const chunk = currentChunkMeta();
-  const [regionJson, chunkJson, npcJson] = await Promise.all([
-    api(`/api/v1/world/${scene.worldId}/region/${scene.regionId}`),
-    api(`/api/v1/world/${scene.worldId}/chunk?regionId=${encodeURIComponent(scene.regionId)}&chunkX=${chunk.chunkX}&chunkY=${chunk.chunkY}&size=${chunk.size}`),
-    api(`/api/v1/npc/nearby?regionId=${encodeURIComponent(scene.regionId)}`)
-  ]);
 
-  worldState.region = regionJson?.data?.region || null;
-  worldState.chunk = chunkJson?.data?.chunk || null;
-  worldState.nearbyNpcs = npcJson?.data?.npcs || [];
+async function hydrateWorldCore() {
+  const scene = currentScene();
+  const chunkMeta = currentChunkMeta();
+
+  try {
+    const json = await api("/api/v1/world/bootstrap", {
+      method: "POST",
+      body: JSON.stringify({
+        characterId: hero.characterId,
+        worldId: scene.worldId,
+        regionId: scene.regionId,
+        x: scene.x,
+        y: scene.y,
+        size: chunkMeta.size
+      })
+    });
+    const data = json?.data || {};
+    worldState.region = data.region || {
+      regionId: scene.regionId,
+      name: regionMeta().title,
+      biome: regionMeta().summary?.toLowerCase().includes("woods") ? "forest" : "plains",
+      dangerLevel: regionMeta().danger || 1,
+      source: "client-fallback"
+    };
+    worldState.chunk = normalizeChunkPayload(scene, chunkMeta, data.chunk || data);
+    mergeSheetCore(data.character || null, data.stats || null);
+    if (Array.isArray(data.npcs) && data.npcs.length) {
+      worldState.nearbyNpcs = normalizeNpcList(data.npcs);
+      worldState.npcsLoaded = true;
+    }
+  } catch {
+    const [regionResult, chunkResult] = await Promise.allSettled([
+      api(`/api/v1/world/${scene.worldId}/region/${scene.regionId}`),
+      api(`/api/v1/world/${scene.worldId}/chunk?regionId=${encodeURIComponent(scene.regionId)}&chunkX=${chunkMeta.chunkX}&chunkY=${chunkMeta.chunkY}&size=${chunkMeta.size}`)
+    ]);
+
+    worldState.region = regionResult.status === "fulfilled"
+      ? (regionResult.value?.data?.region || regionResult.value?.data || null)
+      : {
+          regionId: scene.regionId,
+          name: regionMeta().title,
+          biome: regionMeta().summary?.toLowerCase().includes("woods") ? "forest" : "plains",
+          dangerLevel: regionMeta().danger || 1,
+          source: "client-fallback"
+        };
+
+    worldState.chunk = chunkResult.status === "fulfilled"
+      ? normalizeChunkPayload(scene, chunkMeta, chunkResult.value?.data)
+      : buildFallbackChunk(scene, chunkMeta);
+  }
+
+  if (!tileAt(scene.x, scene.y) && worldState.chunk?.tiles?.length) {
+    const fallbackTile = worldState.chunk.tiles.find((tile) => tile.walkable) || worldState.chunk.tiles[0];
+    if (fallbackTile) setScene({ ...scene, x: fallbackTile.x, y: fallbackTile.y });
+  }
+
+  const selected = selectedTileCoords();
+  if (!tileAt(selected.x, selected.y) && worldState.chunk?.tiles?.length) {
+    const focusTile = tileAt(currentScene().x, currentScene().y) || worldState.chunk.tiles[0];
+    setSelectedTile(focusTile.x, focusTile.y);
+  }
+
+  populateSkillSelects();
+}
+
+async function loadNearbyNpcs() {
+  try {
+    const json = await api(`/api/v1/npc/nearby?regionId=${encodeURIComponent(currentScene().regionId)}`);
+    worldState.nearbyNpcs = normalizeNpcList(json?.data?.npcs || json?.data || []);
+  } catch {
+    worldState.nearbyNpcs = [];
+  }
+  worldState.npcsLoaded = true;
   if (!worldState.selectedNpcId || !worldState.nearbyNpcs.some((item) => item.npcId === worldState.selectedNpcId)) {
     worldState.selectedNpcId = worldState.nearbyNpcs[0]?.npcId || null;
   }
-  if (!selectedTile()) setSelectedTile(scene.x, scene.y);
 }
+
 
 async function updatePresence(status = "active") {
   try {
@@ -527,6 +855,7 @@ async function loadPresence() {
     }
   }
   worldState.presence = uniquePresence(entries);
+  worldState.presenceLoaded = true;
 }
 
 async function hydrateTileDetail() {
@@ -546,13 +875,40 @@ async function hydrateTileDetail() {
   setSelectedSubTile(clamp(sub.x, 0, worldState.detail.size - 1), clamp(sub.y, 0, worldState.detail.size - 1));
 }
 
-async function refreshWorld({ forceContent = false } = {}) {
-  await Promise.all([hydrateWorld(), syncSheet(), loadQuest(), loadPromptRules(), refreshContentSource(forceContent)]);
-  await updatePresence();
-  await loadPresence();
-  if (profile.mapMode === "detail") await hydrateTileDetail();
+
+async function warmWorldData({ forceContent = false, includeNpcs = false } = {}) {
+  const token = ++backgroundRefreshToken;
+  const jobs = [
+    syncSheetExtras(),
+    loadQuest(),
+    loadPromptRules(forceContent),
+    refreshContentSource(forceContent),
+    loadPresence()
+  ];
+  if (includeNpcs || worldState.npcsLoaded) jobs.push(loadNearbyNpcs());
+  await Promise.allSettled(jobs);
+  if (token !== backgroundRefreshToken) return;
   renderAll();
 }
+
+async function refreshWorld({ forceContent = false, includeNpcs = false } = {}) {
+  worldState.presenceLoaded = false;
+  await hydrateWorldCore();
+  if (!sheet.character && !sheet.stats) {
+    await syncSheetCore();
+  }
+  if (profile.mapMode === "detail") {
+    try {
+      await hydrateTileDetail();
+    } catch {
+      worldState.detail = selectedTile() ? buildFallbackDetail(selectedTile()) : null;
+    }
+  }
+  renderAll();
+  void updatePresence();
+  void warmWorldData({ forceContent, includeNpcs });
+}
+
 
 function autoTravelRegion(x, y) {
   const meta = regionMeta();
@@ -727,10 +1083,12 @@ function queueSummary(item) {
 
 function renderQueue() {
   const target = $("action-queue-box");
-  $("action-mode-pill").textContent = actionQueue.length ? `${actionQueue.length} queued` : "Queue ready";
+  if (!target) return;
+  setText("action-mode-pill", actionQueue.length ? `${actionQueue.length} pending` : "Instant submit");
+  setDisabled("run-action-btn", !actionQueue.length);
   if (!actionQueue.length) {
     target.className = "stack-list compact empty-state";
-    target.textContent = "No queued actions.";
+    target.textContent = "Actions submit immediately now. Any older queued actions would appear here.";
     return;
   }
   target.className = "stack-list compact";
@@ -749,8 +1107,7 @@ function renderQueue() {
   target.querySelectorAll("[data-remove-queue]").forEach((button) => {
     button.addEventListener("click", () => {
       actionQueue.splice(Number(button.dataset.removeQueue), 1);
-      profile.actionQueue = actionQueue;
-      saveProfile(profile);
+      persistActionQueue();
       renderQueue();
     });
   });
@@ -758,10 +1115,11 @@ function renderQueue() {
 
 function renderActionResults() {
   const target = $("action-results-box");
+  if (!target) return;
   const results = worldState.lastActionResults || [];
   if (!results.length) {
     target.className = "stack-list compact empty-state";
-    target.textContent = "Run the queue to see outcomes, rewards, failures, and inventory changes.";
+    target.textContent = "Submit an action to see outcomes, rewards, failures, and inventory changes.";
     return;
   }
   target.className = "stack-list compact";
@@ -794,28 +1152,12 @@ function renderActionResults() {
     .join("");
 }
 
-async function queueAction() {
-  const draft = {
-    primarySkill: $("primary-skill-select").value || "GENERAL",
-    secondarySkill: $("secondary-skill-select").value || "",
-    note: $("action-note").value.trim()
-  };
-  if (!draft.note) throw new Error("Write a note so the action has real intent.");
-  const payload = buildQueuedActionPayload(draft);
-  actionQueue.push(payload);
-  profile.actionQueue = actionQueue;
-  saveProfile(profile);
-  renderQueue();
-  pushFeed(profile, "Action queued", `${titleCase(draft.primarySkill)} action added to the queue.`, "info");
-  renderFeed($("feed"), profile, "Your adventure entries will appear here.");
-}
-
-async function runQueue() {
+async function resolveSubmittedActions(actions, { clearPending = false } = {}) {
   requireHero();
-  if (!actionQueue.length) throw new Error("Queue at least one action first.");
+  if (!Array.isArray(actions) || !actions.length) throw new Error("Write an action note first.");
   const json = await api("/api/v1/actions/resolve-queue", {
     method: "POST",
-    body: JSON.stringify({ characterId: hero.characterId, actions: actionQueue })
+    body: JSON.stringify({ characterId: hero.characterId, actions })
   });
   mergeItemMeta(json?.data?.itemMeta);
   worldState.lastActionResults = json?.data?.results || [];
@@ -823,9 +1165,10 @@ async function runQueue() {
     mergeItemMeta(result.itemMeta);
     applyActionSurvival(result.intent || result.actionIntent || result.actionType);
   }
-  actionQueue = [];
-  profile.actionQueue = [];
-  saveProfile(profile);
+  if (clearPending) {
+    actionQueue = [];
+    persistActionQueue();
+  }
   await syncSheet();
   renderAll();
 
@@ -836,6 +1179,26 @@ async function runQueue() {
     pushFeed(profile, result.success ? "Action success" : result.allowed === false ? "Action blocked" : "Action failed", result.message || "Action resolved.", result.success ? "success" : result.allowed === false ? "danger" : "warn");
   }
   renderFeed($("feed"), profile, "Your adventure entries will appear here.");
+}
+
+async function queueAction() {
+  const draft = {
+    primarySkill: $("primary-skill-select").value || "GENERAL",
+    secondarySkill: $("secondary-skill-select").value || "",
+    note: $("action-note").value.trim()
+  };
+  if (!draft.note) throw new Error("Write a note so the action has real intent.");
+  const payload = buildQueuedActionPayload(draft);
+  await resolveSubmittedActions([payload]);
+  const noteField = $("action-note");
+  if (noteField) noteField.value = "";
+  pushFeed(profile, "Action submitted", `${titleCase(draft.primarySkill)} action was sent immediately.`, "info");
+  renderFeed($("feed"), profile, "Your adventure entries will appear here.");
+}
+
+async function runQueue() {
+  if (!actionQueue.length) throw new Error("There are no legacy queued actions to run.");
+  await resolveSubmittedActions(actionQueue, { clearPending: true });
 }
 
 function previewPayloads() {
@@ -878,7 +1241,13 @@ async function applyPreviewXp() {
   renderFeed($("feed"), profile, "Your adventure entries will appear here.");
 }
 
+async function ensureNearbyNpcsLoaded() {
+  if (worldState.npcsLoaded) return;
+  await loadNearbyNpcs();
+}
+
 async function talkToNpc() {
+  await ensureNearbyNpcsLoaded();
   const npc = selectedNpc();
   if (!npc) throw new Error("Select an NPC first.");
   const json = await api("/api/v1/router/dialogue", {
@@ -890,6 +1259,7 @@ async function talkToNpc() {
 }
 
 async function aiDialogue() {
+  await ensureNearbyNpcsLoaded();
   const npc = selectedNpc();
   if (!npc) throw new Error("Select an NPC first.");
   const json = await api("/api/v1/ai/generate-dialogue", {
@@ -906,6 +1276,7 @@ async function aiDialogue() {
 }
 
 async function offerQuest() {
+  await ensureNearbyNpcsLoaded();
   const npc = selectedNpc();
   if (!npc) throw new Error("Select an NPC first.");
   const json = await api("/api/v1/quest/offer-from-npc", {
@@ -939,13 +1310,18 @@ async function completeQuest() {
 function renderRegionMap(target) {
   const scene = currentScene();
   const selected = selectedTileCoords();
-  if (!worldState.chunk?.tiles?.length) {
-    target.innerHTML = "";
+  const chunk = worldState.chunk;
+  if (!chunk?.tiles?.length) {
+    target.innerHTML = '<div class="empty-state">Map unavailable. The client is waiting for chunk data.</div>';
     return;
   }
 
+  const size = Number(chunk.size || currentChunkMeta().size || CHUNK_SIZE) || CHUNK_SIZE;
+  const originX = Number(chunk.originX ?? Math.min(...chunk.tiles.map((tile) => tile.x)));
+  const originY = Number(chunk.originY ?? Math.min(...chunk.tiles.map((tile) => tile.y)));
   target.className = "chunk-grid large-chunk-grid";
-  target.innerHTML = worldState.chunk.tiles
+  target.style.gridTemplateColumns = `repeat(${size}, minmax(0, 1fr))`;
+  target.innerHTML = chunk.tiles
     .map((tile) => {
       const classes = ["chunk-tile", `terrain-${tile.kind}`];
       const tilePlayers = playersOnTile(tile.x, tile.y);
@@ -953,9 +1329,11 @@ function renderRegionMap(target) {
       if (selected.x === tile.x && selected.y === tile.y) classes.push("selected");
       if (!tile.walkable) classes.push("blocked");
       if (tilePlayers.length) classes.push("has-player-presence");
+      const col = clamp(Number(tile.x) - originX + 1, 1, size);
+      const row = clamp(Number(tile.y) - originY + 1, 1, size);
       const title = `${titleCase(tile.kind)} (${tile.x}, ${tile.y})${tilePlayers.length ? ` • Players: ${tilePlayers.map((player) => player.name).join(", ")}` : ""}`;
       return `
-        <button class="${classes.join(" ")}" data-tile-x="${tile.x}" data-tile-y="${tile.y}" title="${escapeHtml(title)}">
+        <button class="${classes.join(" ")}" data-tile-x="${tile.x}" data-tile-y="${tile.y}" title="${escapeHtml(title)}" style="grid-column:${col};grid-row:${row};">
           ${tilePlayers.length ? `<span class="presence-badge">${tilePlayers.length}</span>` : ""}
         </button>
       `;
@@ -1002,13 +1380,13 @@ function renderMap() {
   const target = $("chunk-grid");
   const scene = currentScene();
   const selected = selectedTileCoords();
-  $("chunk-chip").textContent = `${currentChunkMeta().chunkX},${currentChunkMeta().chunkY}`;
-  $("coord-chip").textContent = profile.mapMode === "detail"
+  setText("chunk-chip", `${currentChunkMeta().chunkX},${currentChunkMeta().chunkY}`);
+  setText("coord-chip", profile.mapMode === "detail"
     ? `${selected.x},${selected.y} • ${selectedSubTile().x},${selectedSubTile().y}`
-    : `${selected.x},${selected.y}`;
-  $("map-level-pill").textContent = profile.mapMode === "detail" ? "Tile detail" : "Region map";
-  $("enter-tile-btn").disabled = profile.mapMode === "detail";
-  $("exit-tile-btn").disabled = profile.mapMode !== "detail";
+    : `${selected.x},${selected.y}`);
+  setText("map-level-pill", profile.mapMode === "detail" ? "Tile detail" : "Region map");
+  setDisabled("enter-tile-btn", profile.mapMode === "detail");
+  setDisabled("exit-tile-btn", profile.mapMode !== "detail");
   if (profile.mapMode === "detail") {
     renderDetailMap(target);
   } else {
@@ -1024,12 +1402,14 @@ function renderInspector() {
   $("hero-name").textContent = hero?.name || "—";
   $("region-chip").textContent = worldState.region?.name || regionMeta().title;
   $("objective-chip").textContent = currentObjectiveText();
+  const contentLabel = contentSourceLabel(contentSnapshot);
+  const mapLabel = worldState.chunk?.sourceLabel || (worldState.chunk?.source === "client-fallback" ? "Map fallback" : "Live world");
   $("world-status-pill").textContent = worldState.region ? `World Prime • danger ${worldState.region.dangerLevel}` : "Loading";
-  $("data-source-chip").textContent = contentSourceLabel(contentSnapshot);
+  $("data-source-chip").textContent = `${contentLabel} • ${mapLabel}`;
   $("player-presence-pill").textContent = `${worldState.presence.length} nearby`;
   $("scene-title").textContent = worldState.region?.name || regionMeta().title;
   $("scene-text").textContent = regionMeta().flavor;
-  $("region-summary").textContent = `${worldState.region?.name || regionMeta().title} • ${titleCase(worldState.region?.biome || "plains")} • Content source: ${contentSourceLabel(contentSnapshot)}`;
+  $("region-summary").textContent = `${worldState.region?.name || regionMeta().title} • ${titleCase(worldState.region?.biome || "plains")} • Content source: ${contentLabel} • Map source: ${mapLabel}`;
   $("tile-summary").textContent = tile
     ? `Tile ${tile.x}, ${tile.y} is ${titleCase(tile.kind)}.${tile.walkable ? " It can be walked across." : " It blocks movement."}`
     : "Select a tile.";
@@ -1064,8 +1444,16 @@ function renderInspector() {
 }
 
 function renderNpcList() {
-  $("npc-count-pill").textContent = `${worldState.nearbyNpcs.length} NPC${worldState.nearbyNpcs.length === 1 ? "" : "s"}`;
+  setText("npc-count-pill", worldState.npcsLoaded
+    ? `${worldState.nearbyNpcs.length} NPC${worldState.nearbyNpcs.length === 1 ? "" : "s"}`
+    : "Loading…");
   const target = $("npc-list");
+  if (!target) return;
+  if (!worldState.npcsLoaded) {
+    target.className = "npc-list empty-state";
+    target.textContent = "NPCs will load when needed.";
+    return;
+  }
   if (!worldState.nearbyNpcs.length) {
     target.className = "npc-list empty-state";
     target.textContent = "No one is nearby.";
@@ -1096,11 +1484,11 @@ function renderNpcList() {
 
 function renderDialogue() {
   const npc = selectedNpc();
-  $("dialogue-box").textContent = npc ? `${npc.name}: ${worldState.lastDialogue}` : worldState.lastDialogue;
+  setText("dialogue-box", npc ? `${npc.name}: ${worldState.lastDialogue}` : worldState.lastDialogue);
   const rules = worldState.promptRules;
-  $("npc-rules-box").innerHTML = rules?.toneRules?.length
+  setHTML("npc-rules-box", rules?.toneRules?.length
     ? [...rules.toneRules.slice(0, 3), ...rules.themeRules.slice(0, 2)].map((line) => `<div>• ${escapeHtml(line)}</div>`).join("")
-    : "Communication rules unavailable.";
+    : "Communication rules unavailable.");
 }
 
 function renderQuest() {
@@ -1113,7 +1501,7 @@ function renderQuest() {
         </div>
       `;
     } else {
-      $("quest-box").textContent = "No active quest.";
+      setText("quest-box", "No active quest.");
     }
     return;
   }
@@ -1185,17 +1573,20 @@ function renderAll() {
   renderActionResults();
   renderBuildRequirement();
   renderFeed($("feed"), profile, "Your adventure entries will appear here.");
-  $("combat-state-pill").textContent = "No encounter";
+  setText("combat-state-pill", "No encounter");
 }
+
 
 async function boot() {
   await requireSessionOrRedirect();
   await loadHero();
   populateBuildTypes();
+  renderAll();
   await ensureWorldPosition();
   await refreshWorld();
   renderFeed($("feed"), profile, "Your adventure entries will appear here.");
 }
+
 
 function attach(id, handler) {
   const element = $(id);
@@ -1232,7 +1623,7 @@ function setNpcModalOpen(open) {
 
 attach("back-to-hub-btn", async () => { window.location.href = "/lobby.html"; });
 attach("refresh-world-btn", async () => refreshWorld({ forceContent: true }));
-attach("open-npc-btn", async () => setNpcModalOpen(true));
+attach("open-npc-btn", async () => { setNpcModalOpen(true); await ensureNearbyNpcsLoaded(); renderNpcList(); renderDialogue(); });
 attach("close-npc-btn", async () => setNpcModalOpen(false));
 attach("enter-tile-btn", enterTileDetail);
 attach("exit-tile-btn", exitTileDetail);
@@ -1271,7 +1662,9 @@ $("secondary-skill-select")?.addEventListener("change", scheduleAnalyze);
 
 document.querySelectorAll(".guide-question-btn").forEach((button) => {
   button.addEventListener("click", async () => {
-    $("action-note").value = button.dataset.guideQuestion || "";
+    const noteField = $("action-note");
+    if (!noteField) return;
+    noteField.value = button.dataset.guideQuestion || "";
     await analyzeAction();
   });
 });

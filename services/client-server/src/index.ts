@@ -163,6 +163,47 @@ app.get("/api/v1/character/:characterId/knowledge", asyncRoute(async (req, res) 
   res.status(result.status).json(result.json);
 }));
 
+
+app.post("/api/v1/world/bootstrap", asyncRoute(async (req, res) => {
+  const requestId = getRequestId(req);
+  const worldId = String(req.body?.worldId ?? "world_prime");
+  const regionId = String(req.body?.regionId ?? "starter_lowlands");
+  const characterId = String(req.body?.characterId ?? "");
+  const size = Number(req.body?.size ?? 12);
+  const x = Number(req.body?.x ?? 0);
+  const y = Number(req.body?.y ?? 0);
+
+  if (!characterId) {
+    return sendError(res, SERVICE_NAME, SERVICE_VERSION, requestId, "INVALID_BOOTSTRAP", "characterId is required", 400);
+  }
+
+  const chunkX = Math.floor(x / size);
+  const chunkY = Math.floor(y / size);
+
+  const [characterResult, statsResult, regionResult, chunkResult] = await Promise.all([
+    forward("character-system", `/api/v1/character/${characterId}`, "GET", requestId, undefined, req.header("authorization") ?? undefined),
+    forward("character-system", `/api/v1/character/${characterId}/stats`, "GET", requestId, undefined, req.header("authorization") ?? undefined),
+    forward("world-system", `/api/v1/world/${worldId}/region/${regionId}`, "GET", requestId, undefined, req.header("authorization") ?? undefined),
+    forward("world-system", `/api/v1/world/${worldId}/chunk?regionId=${encodeURIComponent(regionId)}&chunkX=${chunkX}&chunkY=${chunkY}&size=${size}`, "GET", requestId, undefined, req.header("authorization") ?? undefined)
+  ]);
+
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, {
+    character: (characterResult.json as any)?.data?.character || null,
+    stats: (statsResult.json as any)?.data?.stats || {
+      vitals: (statsResult.json as any)?.data?.vitals || null,
+      inventory: (statsResult.json as any)?.data?.inventory || null
+    },
+    region: (regionResult.json as any)?.data?.region || (regionResult.json as any)?.data || null,
+    chunk: (chunkResult.json as any)?.data?.chunk || (chunkResult.json as any)?.data || null,
+    source: {
+      character: characterResult.status,
+      stats: statsResult.status,
+      region: regionResult.status,
+      chunk: chunkResult.status
+    }
+  });
+}));
+
 app.get("/api/v1/world/spawn/:characterId", asyncRoute(async (req, res) => {
   const result = await forward("world-system", `/api/v1/world/spawn/${req.params.characterId}`, "GET", getRequestId(req));
   res.status(result.status).json(result.json);

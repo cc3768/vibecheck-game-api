@@ -1,14 +1,4 @@
-import {
-  SERVICE_VERSION,
-  airtableEnabled,
-  airtableEnsureTable,
-  airtableUpsertByField,
-  createServiceApp,
-  getRequestId,
-  getServiceUrl,
-  sendError,
-  sendSuccess
-} from "../../../packages/shared/src/index";
+import { SERVICE_VERSION, createServiceApp, getRequestId, getServiceUrl, sendError, sendSuccess } from "../../../packages/shared/src/index";
 
 type RecipeRecord = {
   recipeKey: string;
@@ -83,10 +73,14 @@ const app = createServiceApp(SERVICE_NAME);
 
 const STOPWORDS = new Set(["something", "anything", "everything", "there", "thing", "stuff", "item", "items", "world", "area", "place", "maybe", "could", "would", "should", "into", "from", "with", "using", "look", "search", "find", "gather", "collect", "make", "craft", "build", "shape", "prepare", "mine", "forage", "check", "common", "words"]);
 
-type AirtableConfig = { tableItems: string; tableSkills: string; tableRecipes: string; tableDiscoveries: string; tableAliases: string };
+type AirtableConfig = { apiKey: string; baseId: string; tableItems: string; tableSkills: string; tableRecipes: string; tableDiscoveries: string; tableAliases: string };
 function airtableConfig(): AirtableConfig | null {
-  if (!airtableEnabled()) return null;
+  const apiKey = process.env.AIRTABLE_API_KEY ?? "";
+  const baseId = process.env.AIRTABLE_BASE_ID ?? "";
+  if (!apiKey || !baseId) return null;
   return {
+    apiKey,
+    baseId,
     tableItems: process.env.AIRTABLE_TABLE_ITEMS ?? "Items",
     tableSkills: process.env.AIRTABLE_TABLE_SKILLS ?? "Skills",
     tableRecipes: process.env.AIRTABLE_TABLE_RECIPES ?? "Recipes",
@@ -150,6 +144,88 @@ function defaultPrereq(intent: string, primarySkill: string | null | undefined) 
   return [String(primarySkill ?? "GENERAL").toUpperCase() || "GENERAL"];
 }
 
+const GENERIC_HERB_ALIASES = new Set([
+  "unidentified herb",
+  "herb",
+  "herbs",
+  "wild herb",
+  "medicinal herb",
+  "healing herb",
+  "mint",
+  "moonmint",
+  "sunroot",
+  "silverleaf",
+  "bitterwort",
+  "pine needles",
+  "pine needle herb"
+]);
+
+function herbAliases(snapshot: ContentSnapshot) {
+  const aliases = new Set<string>(GENERIC_HERB_ALIASES);
+  for (const entry of snapshot.herbCatalog ?? []) {
+    aliases.add(normalizeText(entry.key));
+    aliases.add(normalizeText(`herb ${entry.key}`));
+  }
+  const herbDiscovery = snapshot.discoveries.find((entry) => entry.targetKey === "unidentified_herb" && entry.type === "item");
+  for (const alias of herbDiscovery?.aliases ?? []) aliases.add(normalizeText(alias));
+  return aliases;
+}
+
+function isHerbLikeProposal(proposal: Proposal, aliases: string[], snapshot: ContentSnapshot) {
+  const values = [
+    proposal.key,
+    proposal.name,
+    proposal.description,
+    proposal.item?.itemKey,
+    proposal.item?.name,
+    proposal.item?.description,
+    ...(proposal.item?.synonyms ?? []),
+    ...aliases
+  ];
+  const herbTerms = herbAliases(snapshot);
+  return values.some((value) => {
+    const normalized = normalizeText(String(value ?? ""));
+    if (!normalized) return false;
+    if (normalized === "unidentified_herb" || normalized.startsWith("herb_")) return true;
+    return herbTerms.has(normalized) || Array.from(herbTerms).some((alias) => normalized.includes(alias) || alias.includes(normalized));
+  });
+}
+
+function genericItemFromSnapshot(snapshot: ContentSnapshot, key: string): DynamicItemRecord | null {
+  const dynamic = snapshot.dynamicItems[key];
+  if (dynamic) return dynamic;
+  const discoveryItem = snapshot.discoveries.find((entry) => entry.type === "item" && entry.targetKey === key)?.item ?? null;
+  if (discoveryItem) return discoveryItem;
+  const meta = snapshot.items[key];
+  if (!meta) return null;
+  return {
+    itemKey: key,
+    name: meta.name ?? titleCaseLocal(key),
+    description: meta.description ?? `${titleCaseLocal(key)}.`,
+    category: key === "unidentified_herb" ? "PLANT" : "DISCOVERED",
+    preferredSkills: key === "unidentified_herb" ? ["FORAGING", "SURVIVAL"] : ["SURVIVAL"],
+    requiredTerrain: key === "unidentified_herb" ? ["forest", "grass", "rock"] : [],
+    synonyms: key === "unidentified_herb" ? Array.from(herbAliases(snapshot)) : [key],
+    discoverable: true,
+    status: "active"
+  };
+}
+
+async function persistAliasesOnly(canonicalType: string, canonicalKey: string, aliases: string[]) {
+  const cleaned = uniqueList(aliases.map((alias) => normalizeText(alias)).filter(Boolean));
+  if (!cleaned.length) return;
+  const cfg = airtableConfig();
+  if (cfg) {
+    for (const alias of cleaned) {
+      await airtableCreate(cfg.tableAliases, { alias, canonicalType, canonicalKey, confidenceBoost: 0.18 });
+    }
+    return;
+  }
+  await serviceFetch("content-system", "/api/v1/content/upsert-runtime", "POST", {
+    aliases: cleaned.map((alias) => ({ alias, canonicalType, canonicalKey, confidenceBoost: 0.18 }))
+  });
+}
+
 function commonWordRisk(value: string) {
   const normalized = normalizeText(value);
   if (!normalized) return true;
@@ -166,68 +242,15 @@ function terrainMatches(requiredTerrain: string[] | undefined, nearbyTerrain: st
 }
 
 async function airtableCreate(tableName: string, fields: Record<string, unknown>) {
-  await airtableUpsertByField(tableName, "_fallbackKey", `${Date.now()}:${Math.random()}`, fields);
-}
-
-let creationTablesReady = false;
-async function ensureCreationTables() {
-  if (!airtableEnabled() || creationTablesReady) return;
   const cfg = airtableConfig();
-  if (!cfg) return;
-
-  await Promise.all([
-    airtableEnsureTable(cfg.tableItems, [
-      { name: "itemKey", type: "singleLineText" },
-      { name: "name", type: "singleLineText" },
-      { name: "description", type: "multilineText" },
-      { name: "category", type: "singleLineText" },
-      { name: "preferredSkills", type: "multilineText" },
-      { name: "requiredTerrain", type: "multilineText" },
-      { name: "synonyms", type: "multilineText" },
-      { name: "discoverable", type: "checkbox" },
-      { name: "status", type: "singleLineText" }
-    ]),
-    airtableEnsureTable(cfg.tableSkills, [
-      { name: "skillKey", type: "singleLineText" },
-      { name: "name", type: "singleLineText" },
-      { name: "description", type: "multilineText" },
-      { name: "unlockHint", type: "multilineText" },
-      { name: "prereqs", type: "multilineText" },
-      { name: "discoverable", type: "checkbox" },
-      { name: "status", type: "singleLineText" }
-    ]),
-    airtableEnsureTable(cfg.tableRecipes, [
-      { name: "recipeKey", type: "singleLineText" },
-      { name: "name", type: "singleLineText" },
-      { name: "inputsJson", type: "multilineText" },
-      { name: "outputsJson", type: "multilineText" },
-      { name: "toolsJson", type: "multilineText" },
-      { name: "station", type: "singleLineText" },
-      { name: "keywords", type: "multilineText" }
-    ]),
-    airtableEnsureTable(cfg.tableDiscoveries, [
-      { name: "discoveryKey", type: "singleLineText" },
-      { name: "type", type: "singleLineText" },
-      { name: "targetKey", type: "singleLineText" },
-      { name: "aliases", type: "multilineText" },
-      { name: "reason", type: "multilineText" },
-      { name: "terrainRules", type: "multilineText" },
-      { name: "intentRules", type: "multilineText" },
-      { name: "confidenceMin", type: "number", options: { precision: 2 } },
-      { name: "autoCreate", type: "checkbox" },
-      { name: "status", type: "singleLineText" },
-      { name: "skillKey", type: "singleLineText" },
-      { name: "recipeKey", type: "singleLineText" }
-    ]),
-    airtableEnsureTable(cfg.tableAliases, [
-      { name: "alias", type: "singleLineText" },
-      { name: "canonicalType", type: "singleLineText" },
-      { name: "canonicalKey", type: "singleLineText" },
-      { name: "confidenceBoost", type: "number", options: { precision: 2 } }
-    ])
-  ]);
-
-  creationTablesReady = true;
+  if (!cfg) return null;
+  const response = await fetch(`https://api.airtable.com/v0/${cfg.baseId}/${encodeURIComponent(tableName)}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${cfg.apiKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ records: [{ fields }] })
+  });
+  if (!response.ok) throw new Error(`Airtable create failed for ${tableName} with ${response.status}`);
+  return response.json();
 }
 
 async function persistRuntime(record: { item?: DynamicItemRecord | null; skill?: DynamicSkillRecord | null; recipe?: RecipeRecord | null; aliases?: string[]; discovery?: ContentSnapshot["discoveries"][number] | null }) {
@@ -264,9 +287,8 @@ async function persistIfNeeded(item: DynamicItemRecord | null, skill: DynamicSki
   const discovery = buildDiscoveryRecord(item, skill, recipe, message, aliases, intent, nearbyTerrain, confidence);
   const cfg = airtableConfig();
   if (cfg) {
-    await ensureCreationTables();
     if (item) {
-      await airtableUpsertByField(cfg.tableItems, "itemKey", item.itemKey, {
+      await airtableCreate(cfg.tableItems, {
         itemKey: item.itemKey,
         name: item.name,
         description: item.description,
@@ -279,7 +301,7 @@ async function persistIfNeeded(item: DynamicItemRecord | null, skill: DynamicSki
       });
     }
     if (skill) {
-      await airtableUpsertByField(cfg.tableSkills, "skillKey", skill.skillKey, {
+      await airtableCreate(cfg.tableSkills, {
         skillKey: skill.skillKey,
         name: skill.name,
         description: skill.description,
@@ -290,7 +312,7 @@ async function persistIfNeeded(item: DynamicItemRecord | null, skill: DynamicSki
       });
     }
     if (recipe) {
-      await airtableUpsertByField(cfg.tableRecipes, "recipeKey", recipe.recipeKey, {
+      await airtableCreate(cfg.tableRecipes, {
         recipeKey: recipe.recipeKey,
         name: recipe.name,
         inputsJson: JSON.stringify(recipe.inputs ?? []),
@@ -300,7 +322,7 @@ async function persistIfNeeded(item: DynamicItemRecord | null, skill: DynamicSki
         keywords: recipe.keywords ?? []
       });
     }
-    await airtableUpsertByField(cfg.tableDiscoveries, "discoveryKey", discovery.discoveryKey, {
+    await airtableCreate(cfg.tableDiscoveries, {
       discoveryKey: discovery.discoveryKey,
       type: discovery.type,
       targetKey: discovery.targetKey,
@@ -315,24 +337,17 @@ async function persistIfNeeded(item: DynamicItemRecord | null, skill: DynamicSki
       recipeKey: recipe?.recipeKey
     });
     for (const alias of aliases) {
-      await airtableUpsertByField(cfg.tableAliases, "alias", alias, {
-        alias,
-        canonicalType: discovery.type,
-        canonicalKey: discovery.targetKey,
-        confidenceBoost: 0.18
-      });
+      await airtableCreate(cfg.tableAliases, { alias, canonicalType: discovery.type, canonicalKey: discovery.targetKey, confidenceBoost: 0.18 });
     }
-    return "airtable" as const;
   } else {
     await persistRuntime({ item, skill, recipe, aliases, discovery });
-    return "runtime" as const;
   }
 }
 
 function canonicalItemFromSnapshot(snapshot: ContentSnapshot, key: string, aliasHint?: string | null) {
   const aliasRecord = aliasHint ? snapshot.aliases[normalizeText(aliasHint)] : null;
   const canonicalKey = aliasRecord?.canonicalKey ?? key;
-  return snapshot.dynamicItems[canonicalKey] ?? null;
+  return genericItemFromSnapshot(snapshot, canonicalKey);
 }
 
 app.post("/api/v1/creation/resolve-proposals", async (req, res) => {
@@ -352,7 +367,23 @@ app.post("/api/v1/creation/resolve-proposals", async (req, res) => {
 
     for (const proposal of proposals.sort((a, b) => Number(b.confidence ?? 0) - Number(a.confidence ?? 0))) {
       if (proposal.type === "item" && !item) {
-        const aliasCandidates = uniqueList([proposal.key, ...(proposal.aliases ?? [])]);
+        const aliasCandidates = uniqueList([proposal.key, proposal.name, ...(proposal.aliases ?? []), ...(proposal.item?.synonyms ?? [])]);
+        if (isHerbLikeProposal(proposal, aliasCandidates, snapshot)) {
+          item = genericItemFromSnapshot(snapshot, "unidentified_herb") ?? {
+            itemKey: "unidentified_herb",
+            name: "Unidentified Herb",
+            description: "A gathered herb that has not been properly identified yet.",
+            category: "PLANT",
+            preferredSkills: ["FORAGING", "SURVIVAL"],
+            requiredTerrain: ["forest", "grass", "rock"],
+            synonyms: aliasCandidates,
+            discoverable: true,
+            status: "active"
+          };
+          await persistAliasesOnly("item", "unidentified_herb", aliasCandidates);
+          resolutions.push({ type: "item", key: item.itemKey, status: "coalesced_generic_unidentified" });
+          continue;
+        }
         const matchedAlias = aliasCandidates.map((alias) => snapshot.aliases[normalizeText(alias)]).find(Boolean) ?? null;
         const existing = canonicalItemFromSnapshot(snapshot, proposal.key, aliasCandidates[0] ?? null);
         if (existing || matchedAlias) {
@@ -381,8 +412,8 @@ app.post("/api/v1/creation/resolve-proposals", async (req, res) => {
           continue;
         }
         item = candidate;
-        const persistedIn = await persistIfNeeded(item, null, null, aliasCandidates, intent, nearbyTerrain, confidence, proposal.reason ?? `Created from action note: ${note}`);
-        resolutions.push({ type: "item", key: item.itemKey, status: persistedIn === "airtable" ? "created_airtable" : "created_runtime" });
+        await persistIfNeeded(item, null, null, aliasCandidates, intent, nearbyTerrain, confidence, proposal.reason ?? `Created from action note: ${note}`);
+        resolutions.push({ type: "item", key: item.itemKey, status: airtableConfig() ? "created_airtable" : "created_runtime" });
       }
 
       if (proposal.type === "skill" && !skill) {
@@ -404,8 +435,8 @@ app.post("/api/v1/creation/resolve-proposals", async (req, res) => {
         };
         const confidence = Number(proposal.confidence ?? 0.5);
         skill = candidate;
-        const persistedIn = await persistIfNeeded(null, skill, null, [skill.name, skill.skillKey], intent, nearbyTerrain, confidence, proposal.reason ?? `Created from action note: ${note}`);
-        resolutions.push({ type: "skill", key: skill.skillKey, status: persistedIn === "airtable" ? "created_airtable" : "created_runtime" });
+        await persistIfNeeded(null, skill, null, [skill.name, skill.skillKey], intent, nearbyTerrain, confidence, proposal.reason ?? `Created from action note: ${note}`);
+        resolutions.push({ type: "skill", key: skill.skillKey, status: airtableConfig() ? "created_airtable" : "created_runtime" });
       }
 
       if (proposal.type === "recipe" && !recipe) {
@@ -418,8 +449,8 @@ app.post("/api/v1/creation/resolve-proposals", async (req, res) => {
         }
         const confidence = Number(proposal.confidence ?? 0.5);
         recipe = candidate;
-        const persistedIn = await persistIfNeeded(null, null, recipe, [recipe.name, recipe.recipeKey], intent, nearbyTerrain, confidence, proposal.reason ?? `Created from action note: ${note}`);
-        resolutions.push({ type: "recipe", key: recipe.recipeKey, status: persistedIn === "airtable" ? "created_airtable" : "created_runtime" });
+        await persistIfNeeded(null, null, recipe, [recipe.name, recipe.recipeKey], intent, nearbyTerrain, confidence, proposal.reason ?? `Created from action note: ${note}`);
+        resolutions.push({ type: "recipe", key: recipe.recipeKey, status: airtableConfig() ? "created_airtable" : "created_runtime" });
       }
     }
 

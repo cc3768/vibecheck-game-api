@@ -17,6 +17,7 @@ import {
   getRequestId,
   makeId,
   nowIso,
+  sendError,
   sendSuccess
 } from "../../../packages/shared/src/index";
 
@@ -62,6 +63,10 @@ const localObjects: WorldObject[] = [
 ];
 
 const localPresence = new Map<string, PresenceSnapshot>();
+const travelPaths = new Map<string, Record<string, unknown>>();
+const discoveredPois = new Map<string, Record<string, unknown>>();
+const claims = new Map<string, Record<string, unknown>>();
+const shareModes = new Map<string, string>();
 let worldTablesReady = false;
 
 function escapeFormulaValue(value: string) {
@@ -704,6 +709,359 @@ app.post("/api/v1/world/environment/context", (req, res) => {
     dangerLevel: region.dangerLevel,
     mapModel: { regionGridSize: REGION_GRID_SIZE, tileDetailGridSize: TILE_DETAIL_GRID_SIZE, zAxisEnabled: true }
   });
+});
+
+
+function allActivePresence() {
+  return Array.from(localPresence.values()).filter((entry) => Date.now() - new Date(entry.updatedAt).getTime() <= 1000 * 60 * 2);
+}
+
+function findPresenceByCharacter(characterId: string) {
+  return allActivePresence().find((entry) => entry.characterId === characterId) ?? null;
+}
+
+function listPresenceForWorld(worldId: string) {
+  return allActivePresence().filter((entry) => entry.worldId === worldId);
+}
+
+function regionWeather(regionId: string) {
+  if (regionId === "whisper_woods") return { current: "MIST", forecast: ["MIST", "LIGHT_RAIN", "CLEAR"] };
+  return { current: "CLEAR", forecast: ["CLEAR", "BREEZY", "CLEAR"] };
+}
+
+function adjacentRegions(worldId: string, regionId: string) {
+  const regions = WORLD_REGIONS.filter((entry) => entry.worldId === worldId);
+  const index = Math.max(0, regions.findIndex((entry) => entry.regionId === regionId));
+  return [regions[index - 1], regions[index + 1]].filter(Boolean);
+}
+
+function simplePath(from: { x: number; y: number; z: number }, to: { x: number; y: number; z: number }) {
+  const points: Array<{ x: number; y: number; z: number }> = [];
+  const steps = Math.max(Math.abs(to.x - from.x), Math.abs(to.y - from.y), Math.abs(to.z - from.z), 1);
+  for (let step = 0; step <= steps; step += 1) {
+    const ratio = step / steps;
+    points.push({
+      x: Math.round(from.x + (to.x - from.x) * ratio),
+      y: Math.round(from.y + (to.y - from.y) * ratio),
+      z: Math.round(from.z + (to.z - from.z) * ratio)
+    });
+  }
+  return points;
+}
+
+function tileProjectionPayload(worldId: string, regionId: string, tileX: number, tileY: number, tileZ = 0) {
+  const tile = tileFor(worldId, regionId, tileX, tileY, tileZ);
+  return {
+    tile,
+    zoomedFrom: { regionTileX: tileX, regionTileY: tileY },
+    detailOrigin: { x: tileX * TILE_DETAIL_GRID_SIZE, y: tileY * TILE_DETAIL_GRID_SIZE, z: tileZ },
+    detailSize: TILE_DETAIL_GRID_SIZE,
+    terrainKind: tile.kind,
+    resourceType: tile.resourceType,
+    walkable: tile.walkable
+  };
+}
+
+function minimapPayload(worldId: string, regionId: string, tileX: number, tileY: number, tileZ = 0) {
+  const rows: Array<Array<Record<string, unknown>>> = [];
+  for (let y = tileY - 1; y <= tileY + 1; y += 1) {
+    const row: Array<Record<string, unknown>> = [];
+    for (let x = tileX - 1; x <= tileX + 1; x += 1) {
+      const tile = tileFor(worldId, regionId, x, y, tileZ);
+      row.push({ x, y, kind: tile.kind, walkable: tile.walkable, resourceType: tile.resourceType, focus: x === tileX && y === tileY });
+    }
+    rows.push(row);
+  }
+  return { rows, focus: { x: tileX, y: tileY, z: tileZ } };
+}
+
+async function occupantsForTile(worldId: string, regionId: string, tileX: number, tileY: number, tileZ = 0) {
+  const players = (await listPresence(worldId, regionId)).filter((entry) => Number(entry.x) === tileX && Number(entry.y) === tileY && Number(entry.z) === tileZ);
+  const objects = (await loadRegionObjects(worldId, regionId)).filter((entry) => entry.position.x === tileX && entry.position.y === tileY && entry.position.z === tileZ);
+  return { players, objects };
+}
+
+async function nearbyPoi(worldId: string, regionId: string, x: number, y: number) {
+  return Array.from(discoveredPois.values()).filter((entry) => String(entry.worldId ?? "") === worldId && String(entry.regionId ?? "") === regionId && Math.abs(Number(entry.x ?? 0) - x) <= 6 && Math.abs(Number(entry.y ?? 0) - y) <= 6);
+}
+
+
+app.post("/api/v1/world/travel/validate", async (req, res) => {
+  const requestId = getRequestId(req);
+  const position = req.body?.to ?? req.body?.position ?? req.body ?? {};
+  const worldId = String(position.worldId ?? "world_prime");
+  const regionId = String(position.regionId ?? "starter_lowlands");
+  const x = Number(position.x ?? 0);
+  const y = Number(position.y ?? 0);
+  const z = Number(position.z ?? 0);
+  const tile = tileFor(worldId, regionId, x, y, z);
+  if (!tile.walkable) {
+    return sendError(res, SERVICE_NAME, SERVICE_VERSION, requestId, "TRAVEL_BLOCKED", "Target tile is not walkable", 409, { tile });
+  }
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { valid: true, tile, cost: 1, warnings: [] });
+});
+
+app.post("/api/v1/world/travel/move", async (req, res) => {
+  const requestId = getRequestId(req);
+  const characterId = String(req.body?.characterId ?? "");
+  const accountId = String(req.body?.accountId ?? "");
+  const position = req.body?.to ?? req.body?.position ?? req.body ?? {};
+  const worldId = String(position.worldId ?? "world_prime");
+  const regionId = String(position.regionId ?? "starter_lowlands");
+  const x = Number(position.x ?? 0);
+  const y = Number(position.y ?? 0);
+  const z = Number(position.z ?? 0);
+  const tile = tileFor(worldId, regionId, x, y, z);
+  if (!tile.walkable) {
+    return sendError(res, SERVICE_NAME, SERVICE_VERSION, requestId, "TRAVEL_BLOCKED", "Target tile is not walkable", 409, { tile });
+  }
+  const snapshot: PresenceSnapshot = { presenceKey: characterId || makeId("presence"), characterId, accountId, worldId, regionId, x, y, z, updatedAt: nowIso() };
+  await upsertPresence(snapshot);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { moved: true, presence: snapshot, tile });
+});
+
+app.post("/api/v1/world/travel/path", async (req, res) => {
+  const requestId = getRequestId(req);
+  const from = req.body?.from ?? { x: 0, y: 0, z: 0 };
+  const to = req.body?.to ?? { x: 0, y: 0, z: 0 };
+  const worldId = String(req.body?.worldId ?? from.worldId ?? to.worldId ?? "world_prime");
+  const regionId = String(req.body?.regionId ?? from.regionId ?? to.regionId ?? "starter_lowlands");
+  const pathId = makeId("path");
+  const points = simplePath({ x: Number(from.x ?? 0), y: Number(from.y ?? 0), z: Number(from.z ?? 0) }, { x: Number(to.x ?? 0), y: Number(to.y ?? 0), z: Number(to.z ?? 0) });
+  const payload = { pathId, worldId, regionId, from, to, points, createdAt: nowIso() };
+  travelPaths.set(pathId, payload);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, payload, 201);
+});
+
+app.get("/api/v1/world/travel/path/:pathId", async (req, res) => {
+  const requestId = getRequestId(req);
+  const path = travelPaths.get(String(req.params.pathId ?? "")) ?? null;
+  if (!path) return sendError(res, SERVICE_NAME, SERVICE_VERSION, requestId, "PATH_NOT_FOUND", "Travel path not found", 404);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { path });
+});
+
+app.get("/api/v1/world/:worldId/region/:regionId/summary", async (req, res) => {
+  const requestId = getRequestId(req);
+  const region = regionFor(req.params.worldId, req.params.regionId);
+  const players = await listPresence(req.params.worldId, req.params.regionId);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { region, playerCount: players.length, weather: regionWeather(region.regionId), adjacent: adjacentRegions(region.worldId, region.regionId) });
+});
+
+app.get("/api/v1/world/:worldId/region/:regionId/players", async (req, res) => {
+  const requestId = getRequestId(req);
+  const players = await listPresence(req.params.worldId, req.params.regionId);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { players, count: players.length });
+});
+
+app.get("/api/v1/world/:worldId/region/:regionId/resources", async (req, res) => {
+  const requestId = getRequestId(req);
+  const resources: Array<Record<string, unknown>> = [];
+  for (let y = 0; y < REGION_GRID_SIZE; y += 1) {
+    for (let x = 0; x < REGION_GRID_SIZE; x += 1) {
+      const tile = tileFor(req.params.worldId, req.params.regionId, x, y, 0);
+      if (tile.resourceType) resources.push({ x, y, z: 0, resourceType: tile.resourceType, kind: tile.kind });
+    }
+  }
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { resources });
+});
+
+app.get("/api/v1/world/:worldId/region/:regionId/events", async (req, res) => {
+  const requestId = getRequestId(req);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { events: [{ eventKey: `ambient_${req.params.regionId}`, type: "AMBIENT", note: `Ambient activity in ${req.params.regionId}` }] });
+});
+
+app.get("/api/v1/world/:worldId/region/:regionId/weather", async (req, res) => {
+  const requestId = getRequestId(req);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { weather: regionWeather(req.params.regionId).current });
+});
+
+app.get("/api/v1/world/:worldId/region/:regionId/weather/forecast", async (req, res) => {
+  const requestId = getRequestId(req);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { forecast: regionWeather(req.params.regionId).forecast });
+});
+
+app.get("/api/v1/world/:worldId/region/:regionId/legend", async (req, res) => {
+  const requestId = getRequestId(req);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { legend: [{ kind: "grass", walkable: true }, { kind: "forest", walkable: true }, { kind: "rock", walkable: true }, { kind: "water", walkable: false }] });
+});
+
+app.get("/api/v1/world/:worldId/region/:regionId/adjacent", async (req, res) => {
+  const requestId = getRequestId(req);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { adjacent: adjacentRegions(req.params.worldId, req.params.regionId) });
+});
+
+app.get("/api/v1/world/:worldId/region/:regionId/tile/:tileX/:tileY/summary", async (req, res) => {
+  const requestId = getRequestId(req);
+  const tileX = Number(req.params.tileX);
+  const tileY = Number(req.params.tileY);
+  const tileZ = Number(req.query.z ?? 0);
+  const tile = tileFor(req.params.worldId, req.params.regionId, tileX, tileY, tileZ);
+  const occupants = await occupantsForTile(req.params.worldId, req.params.regionId, tileX, tileY, tileZ);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { tile, occupants });
+});
+
+app.get("/api/v1/world/:worldId/region/:regionId/tile/:tileX/:tileY/occupants", async (req, res) => {
+  const requestId = getRequestId(req);
+  const payload = await occupantsForTile(req.params.worldId, req.params.regionId, Number(req.params.tileX), Number(req.params.tileY), Number(req.query.z ?? 0));
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, payload);
+});
+
+app.get("/api/v1/world/:worldId/region/:regionId/tile/:tileX/:tileY/resources", async (req, res) => {
+  const requestId = getRequestId(req);
+  const tile = tileFor(req.params.worldId, req.params.regionId, Number(req.params.tileX), Number(req.params.tileY), Number(req.query.z ?? 0));
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { resources: tile.resourceType ? [{ resourceType: tile.resourceType, x: tile.x, y: tile.y, z: tile.z }] : [] });
+});
+
+app.get("/api/v1/world/:worldId/region/:regionId/tile/:tileX/:tileY/structures", async (req, res) => {
+  const requestId = getRequestId(req);
+  const objects = (await loadRegionObjects(req.params.worldId, req.params.regionId)).filter((entry) => entry.position.x === Number(req.params.tileX) && entry.position.y === Number(req.params.tileY) && entry.position.z === Number(req.query.z ?? 0));
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { structures: objects });
+});
+
+app.get("/api/v1/world/:worldId/region/:regionId/tile/:tileX/:tileY/visibility", async (req, res) => {
+  const requestId = getRequestId(req);
+  const tile = tileFor(req.params.worldId, req.params.regionId, Number(req.params.tileX), Number(req.params.tileY), Number(req.query.z ?? 0));
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { visible: tile.walkable, fogged: false, tile });
+});
+
+app.get("/api/v1/world/:worldId/region/:regionId/tile/:tileX/:tileY/projection", async (req, res) => {
+  const requestId = getRequestId(req);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { projection: tileProjectionPayload(req.params.worldId, req.params.regionId, Number(req.params.tileX), Number(req.params.tileY), Number(req.query.z ?? 0)) });
+});
+
+app.get("/api/v1/world/:worldId/region/:regionId/tile/:tileX/:tileY/minimap", async (req, res) => {
+  const requestId = getRequestId(req);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { minimap: minimapPayload(req.params.worldId, req.params.regionId, Number(req.params.tileX), Number(req.params.tileY), Number(req.query.z ?? 0)) });
+});
+
+app.post("/api/v1/world/fog-of-war/reveal", async (req, res) => {
+  const requestId = getRequestId(req);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { revealed: true, tiles: req.body?.tiles ?? [] });
+});
+
+app.post("/api/v1/world/fog-of-war/update", async (req, res) => {
+  const requestId = getRequestId(req);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { updated: true, payload: req.body ?? {} });
+});
+
+app.post("/api/v1/world/scout", async (req, res) => {
+  const requestId = getRequestId(req);
+  const position = req.body?.position ?? { worldId: "world_prime", regionId: "starter_lowlands", x: 0, y: 0, z: 0 };
+  const resources = [] as Array<Record<string, unknown>>;
+  for (let y = Number(position.y ?? 0) - 2; y <= Number(position.y ?? 0) + 2; y += 1) {
+    for (let x = Number(position.x ?? 0) - 2; x <= Number(position.x ?? 0) + 2; x += 1) {
+      const tile = tileFor(String(position.worldId), String(position.regionId), x, y, Number(position.z ?? 0));
+      if (tile.resourceType) resources.push({ x, y, resourceType: tile.resourceType, kind: tile.kind });
+    }
+  }
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { scouted: true, resources, weather: regionWeather(String(position.regionId)).current });
+});
+
+app.post("/api/v1/world/discover-poi", async (req, res) => {
+  const requestId = getRequestId(req);
+  const position = req.body?.position ?? { worldId: "world_prime", regionId: "starter_lowlands", x: 0, y: 0, z: 0 };
+  const poiId = makeId("poi");
+  const poi = { poiId, worldId: String(position.worldId), regionId: String(position.regionId), x: Number(position.x ?? 0), y: Number(position.y ?? 0), z: Number(position.z ?? 0), label: String(req.body?.label ?? `POI ${poiId}`), discoveredAt: nowIso() };
+  discoveredPois.set(poiId, poi);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { poi }, 201);
+});
+
+app.get("/api/v1/world/poi/:poiId", async (req, res) => {
+  const requestId = getRequestId(req);
+  const poi = discoveredPois.get(String(req.params.poiId ?? "")) ?? null;
+  if (!poi) return sendError(res, SERVICE_NAME, SERVICE_VERSION, requestId, "POI_NOT_FOUND", "Point of interest not found", 404);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { poi });
+});
+
+app.get("/api/v1/world/poi/nearby", async (req, res) => {
+  const requestId = getRequestId(req);
+  const worldId = String(req.query.worldId ?? "world_prime");
+  const regionId = String(req.query.regionId ?? "starter_lowlands");
+  const x = Number(req.query.x ?? 0);
+  const y = Number(req.query.y ?? 0);
+  const pois = await nearbyPoi(worldId, regionId, x, y);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { pois, count: pois.length });
+});
+
+app.post("/api/v1/world/claim", async (req, res) => {
+  const requestId = getRequestId(req);
+  const claimKey = `${String(req.body?.worldId ?? "world_prime")}:${String(req.body?.regionId ?? "starter_lowlands")}:${Number(req.body?.x ?? 0)}:${Number(req.body?.y ?? 0)}:${Number(req.body?.z ?? 0)}`;
+  const claim = { claimKey, ownerCharacterId: String(req.body?.characterId ?? ""), worldId: String(req.body?.worldId ?? "world_prime"), regionId: String(req.body?.regionId ?? "starter_lowlands"), x: Number(req.body?.x ?? 0), y: Number(req.body?.y ?? 0), z: Number(req.body?.z ?? 0), claimedAt: nowIso() };
+  claims.set(claimKey, claim);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { claimed: true, claim });
+});
+
+app.post("/api/v1/world/unclaim", async (req, res) => {
+  const requestId = getRequestId(req);
+  const claimKey = `${String(req.body?.worldId ?? "world_prime")}:${String(req.body?.regionId ?? "starter_lowlands")}:${Number(req.body?.x ?? 0)}:${Number(req.body?.y ?? 0)}:${Number(req.body?.z ?? 0)}`;
+  claims.delete(claimKey);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { unclaimed: true, claimKey });
+});
+
+app.post("/api/v1/world/presence/batch", async (req, res) => {
+  const requestId = getRequestId(req);
+  const entries = Array.isArray(req.body?.entries) ? req.body.entries : [];
+  const applied: PresenceSnapshot[] = [];
+  for (const entry of entries) {
+    const snapshot: PresenceSnapshot = {
+      presenceKey: String(entry.presenceKey ?? entry.characterId ?? makeId("presence")),
+      characterId: String(entry.characterId ?? ""),
+      accountId: String(entry.accountId ?? ""),
+      worldId: String(entry.worldId ?? entry.position?.worldId ?? "world_prime"),
+      regionId: String(entry.regionId ?? entry.position?.regionId ?? "starter_lowlands"),
+      x: Number(entry.x ?? entry.position?.x ?? 0),
+      y: Number(entry.y ?? entry.position?.y ?? 0),
+      z: Number(entry.z ?? entry.position?.z ?? 0),
+      updatedAt: nowIso()
+    };
+    await upsertPresence(snapshot);
+    applied.push(snapshot);
+  }
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { updated: applied.length, entries: applied });
+});
+
+app.get("/api/v1/world/presence/world/:worldId", async (req, res) => {
+  const requestId = getRequestId(req);
+  const players = listPresenceForWorld(String(req.params.worldId ?? "world_prime"));
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { worldId: req.params.worldId, players, count: players.length });
+});
+
+app.get("/api/v1/world/presence/character/:characterId", async (req, res) => {
+  const requestId = getRequestId(req);
+  const presence = findPresenceByCharacter(String(req.params.characterId ?? ""));
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { presence, shareMode: shareModes.get(String(req.params.characterId ?? "")) ?? "world" });
+});
+
+app.post("/api/v1/world/presence/share-mode", async (req, res) => {
+  const requestId = getRequestId(req);
+  const characterId = String(req.body?.characterId ?? "");
+  const mode = String(req.body?.mode ?? "world");
+  shareModes.set(characterId, mode);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { characterId, mode });
+});
+
+app.post("/api/v1/world/presence/heartbeat", async (req, res) => {
+  const requestId = getRequestId(req);
+  const current = findPresenceByCharacter(String(req.body?.characterId ?? ""));
+  if (!current) return sendError(res, SERVICE_NAME, SERVICE_VERSION, requestId, "PRESENCE_NOT_FOUND", "Presence not found for heartbeat", 404);
+  const next = { ...current, updatedAt: nowIso() };
+  await upsertPresence(next);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { alive: true, presence: next });
+});
+
+app.get("/api/v1/world/presence/nearby/:characterId", async (req, res) => {
+  const requestId = getRequestId(req);
+  const focus = findPresenceByCharacter(String(req.params.characterId ?? ""));
+  if (!focus) return sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { players: [], count: 0 });
+  const players = (await listPresence(focus.worldId, focus.regionId)).filter((entry) => entry.characterId !== focus.characterId && Math.abs(entry.x - focus.x) <= 6 && Math.abs(entry.y - focus.y) <= 6 && Math.abs(entry.z - focus.z) <= 1);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { players, count: players.length, focus });
+});
+
+app.get("/api/v1/stream/world/presence", async (req, res) => {
+  const requestId = getRequestId(req);
+  const worldId = String(req.query.worldId ?? "world_prime");
+  const players = listPresenceForWorld(worldId);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, { stream: "world-presence", transport: "http-polling-compatible", worldId, players, count: players.length });
 });
 
 app.listen(PORT, () => console.log(`[${SERVICE_NAME}] listening on http://127.0.0.1:${PORT}`));

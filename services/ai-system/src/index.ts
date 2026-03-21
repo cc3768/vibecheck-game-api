@@ -104,7 +104,49 @@ type Proposal = {
   preferredSkills?: string[];
 };
 
+type ActionUnderstanding = {
+  objective: "SURVEY_AREA" | "FIND_COLLECTIBLES" | "FIND_SPECIFIC_RESOURCE" | "HARVEST_RESOURCE" | "CRAFT_ITEM" | "BUILD_STRUCTURE" | "GENERAL";
+  targetType: "NONE" | "ITEM" | "RESOURCE" | "NPC" | "LOCATION";
+  targetKey: string | null;
+  broadSearch: boolean;
+  canCreateContent: boolean;
+  searchTags: string[];
+  observationBias: "survey" | "collectibles" | "specific";
+};
+
+type AnalysisResult = {
+  intent: string;
+  target: { text: string; normalizedKey: string; type: string } | null;
+  confidence: number;
+  proposals: Proposal[];
+  message: string;
+  understanding: ActionUnderstanding;
+};
+
 const FALLBACK_DISCOVERIES: DiscoverySeedRecord[] = [
+{
+  discoveryKey: "discovery_unidentified_herb",
+  type: "item",
+  targetKey: "unidentified_herb",
+  aliases: ["unidentified herb", "herb", "herbs", "wild herb", "medicinal herb", "healing herb", "mint", "moonmint", "sunroot", "silverleaf", "bitterwort", "pine needles", "pine needle herb"],
+  terrainRules: ["forest", "grass", "rock"],
+  intentRules: ["FORAGE", "SCOUT", "IDENTIFY_HERB"],
+  confidenceMin: 0.55,
+  autoCreate: false,
+  status: "active",
+  item: {
+    itemKey: "unidentified_herb",
+    name: "Unidentified Herb",
+    description: "A gathered herb that has not been properly identified yet.",
+    category: "PLANT",
+    preferredSkills: ["FORAGING", "SURVIVAL"],
+    requiredTerrain: ["forest", "grass", "rock"],
+    synonyms: ["unidentified herb", "herb", "herbs", "wild herb", "medicinal herb", "healing herb", "mint", "moonmint", "sunroot", "silverleaf", "bitterwort", "pine needles", "pine needle herb"],
+    discoverable: true,
+    status: "active"
+  },
+  reason: "Many herb finds should stay unidentified until a player examines them properly."
+},
   {
     discoveryKey: "discovery_flint",
     type: "item",
@@ -172,7 +214,79 @@ const FALLBACK_DISCOVERIES: DiscoverySeedRecord[] = [
 ];
 
 const COMMON_WORDS = new Set([
-  "the", "a", "an", "i", "me", "my", "you", "it", "that", "this", "these", "those", "thing", "things", "stuff", "item", "items", "world", "area", "place", "common", "word", "words", "something", "anything", "everything", "there", "here", "look", "search", "find", "gather", "collect", "make", "craft", "build", "shape", "prepare", "mine", "forage", "check", "want", "need", "should", "could", "would", "with", "from", "into", "using", "new", "more", "less", "such"
+  "the", "a", "an", "i", "me", "my", "you", "it", "that", "this", "these", "those", "thing", "things", "stuff", "item", "items", "world", "area", "place", "common", "word", "words", "something", "anything", "everything", "there", "here", "look", "search", "find", "gather", "collect", "make", "craft", "build", "shape", "prepare", "mine", "forage", "check", "want", "need", "should", "could", "would", "with", "from", "into", "using", "new", "more", "less", "such", "to", "and", "or", "around", "nearby", "some", "useful", "resources", "resource", "materials", "material", "patch", "terrain", "brush"
+]);
+
+const GENERIC_TARGET_PHRASES = new Set([
+  "look around",
+  "look around for things to collect",
+  "things to collect",
+  "something useful",
+  "anything useful",
+  "things nearby",
+  "stuff around",
+  "things",
+  "stuff",
+  "resources",
+  "materials"
+]);
+
+const GENERIC_HERB_ALIASES = new Set([
+  "unidentified herb",
+  "herb",
+  "herbs",
+  "wild herb",
+  "medicinal herb",
+  "healing herb",
+  "mint",
+  "moonmint",
+  "sunroot",
+  "silverleaf",
+  "bitterwort",
+  "pine needles",
+  "pine needle herb"
+]);
+
+function herbAliases(snapshot?: ContentSnapshot) {
+  const aliases = new Set<string>(GENERIC_HERB_ALIASES);
+  for (const entry of snapshot?.herbCatalog ?? []) {
+    aliases.add(normalizeText(entry.key));
+    aliases.add(normalizeText(`herb ${entry.key}`));
+  }
+  const herbDiscovery = snapshot?.discoveries?.find((entry) => entry.targetKey === "unidentified_herb" && entry.type === "item");
+  for (const alias of herbDiscovery?.aliases ?? []) aliases.add(normalizeText(alias));
+  return aliases;
+}
+
+function isHerbLikeCandidate(candidate: string | null | undefined, snapshot?: ContentSnapshot) {
+  const normalized = normalizeText(candidate ?? "");
+  if (!normalized) return false;
+  if (normalized === "unidentified_herb") return true;
+  if (normalized.startsWith("herb_")) return true;
+  const aliases = herbAliases(snapshot);
+  if (aliases.has(normalized)) return true;
+  return Array.from(aliases).some((alias) => normalized.includes(alias) || alias.includes(normalized));
+}
+
+function buildUnidentifiedHerbItem(snapshot?: ContentSnapshot): DynamicItemRecord {
+  const existing = snapshot?.dynamicItems?.unidentified_herb;
+  if (existing) return existing;
+  const meta = snapshot?.items?.unidentified_herb;
+  return {
+    itemKey: "unidentified_herb",
+    name: meta?.name ?? "Unidentified Herb",
+    description: meta?.description ?? "A gathered herb that has not been properly identified yet.",
+    category: "PLANT",
+    preferredSkills: ["FORAGING", "SURVIVAL"],
+    requiredTerrain: ["forest", "grass", "rock"],
+    synonyms: Array.from(herbAliases(snapshot)),
+    discoverable: true,
+    status: "active"
+  } satisfies DynamicItemRecord;
+}
+
+const SEARCH_DIRECTIVE_WORDS = new Set([
+  "look", "around", "search", "find", "gather", "collect", "check", "survey", "observe", "scan", "seek", "hunt", "for", "to"
 ]);
 
 async function serviceFetch<T = unknown>(serviceName: string, routePath: string, method = "GET", body?: unknown): Promise<T> {
@@ -299,31 +413,112 @@ function detectCanonicalDiscovery(text: string, snapshot: ContentSnapshot) {
 function isLikelyCommonWord(candidate: string) {
   const normalized = normalizeText(candidate);
   if (!normalized || normalized.length < 3) return true;
+  if (GENERIC_TARGET_PHRASES.has(normalized)) return true;
   const words = normalized.split(" ");
   if (words.length > 4) return true;
   return words.every((word) => COMMON_WORDS.has(word));
 }
 
-function extractCandidatePhrase(text: string, intent: string): string | null {
+function broadSearchLikely(text: string, intent: string) {
   const normalized = normalizeText(text);
+  if (!normalized) return false;
+  if (GENERIC_TARGET_PHRASES.has(normalized)) return true;
+  if (/(look around|search the area|survey the area|observe the area|check the area)/.test(normalized)) return true;
+  if (/(find|look for|search for).*(something|anything|things|stuff|materials|resources|collect)/.test(normalized)) return true;
+  if (intent === "SCOUT" && !/(find|look for|search for)\s+[a-z]/.test(normalized) && !/(mine|forage|gather|collect)\s+[a-z]/.test(normalized)) return true;
+  return false;
+}
+
+function inferObjective(text: string, intent: string): ActionUnderstanding["objective"] {
+  const normalized = normalizeText(text);
+  if (intent === "BUILD") return "BUILD_STRUCTURE";
+  if (intent === "CRAFT_RECIPE") return "CRAFT_ITEM";
+  if (intent === "FORAGE" && /(herb|berry|root|reed|fiber|mushroom|gather|collect)/.test(normalized)) return "HARVEST_RESOURCE";
+  if (intent === "MINE") return "FIND_SPECIFIC_RESOURCE";
+  if (/(things to collect|collectibles|materials|resources|something useful|anything useful)/.test(normalized)) return "FIND_COLLECTIBLES";
+  if (/(find|look for|search for)\s+[a-z]/.test(normalized)) return "FIND_SPECIFIC_RESOURCE";
+  if (intent === "SCOUT") return "SURVEY_AREA";
+  return "GENERAL";
+}
+
+function extractSearchTags(text: string, nearbyTerrain: string[]) {
+  const normalized = normalizeText(text);
+  const tags = new Set<string>();
+  if (/(collect|gather|forage|harvest)/.test(normalized)) tags.add("collectible");
+  if (/(herb|berry|root|mushroom|plant|reed|fiber)/.test(normalized)) tags.add("plant");
+  if (/(rock|stone|ore|quartz|quarz|flint|crystal|mineral)/.test(normalized)) tags.add("mineral");
+  if (/(water|river|stream|pond|drink)/.test(normalized)) tags.add("water");
+  if (/(wood|tree|branch|bark|log)/.test(normalized)) tags.add("wood");
+  if (!tags.size && nearbyTerrain.includes("forest")) tags.add("plant");
+  if (!tags.size && nearbyTerrain.includes("rock")) tags.add("mineral");
+  if (!tags.size && nearbyTerrain.includes("water")) tags.add("water");
+  if (!tags.size) tags.add("general");
+  return Array.from(tags);
+}
+
+function sanitizeCandidate(candidate: string | null) {
+  const normalized = normalizeText(candidate ?? "");
+  if (!normalized) return null;
+  const cleaned = normalized
+    .replace(/\b(with|from|using|near|at|on|into|out of|around|nearby)\b.*$/, "")
+    .replace(/\b(things|stuff|something|anything|materials|resources|collect|gather|find|search|look|around)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned || GENERIC_TARGET_PHRASES.has(cleaned)) return null;
+  const words = cleaned.split(" ");
+  if (!words.length || words.every((word) => COMMON_WORDS.has(word) || SEARCH_DIRECTIVE_WORDS.has(word))) return null;
+  return cleaned;
+}
+
+function extractCandidatePhrase(text: string, intent: string, broadSearch: boolean): string | null {
+  const normalized = normalizeText(text);
+  if (!normalized || broadSearch) return null;
+
   const patterns = [
-    /(?:find|look for|search for|gather|collect|harvest|mine|dig up|forage for|track down)\s+([a-z][a-z\s_-]{1,40})/,
-    /(?:craft|make|build|shape|assemble|forge|smelt|brew|prepare)\s+(?:a|an|some)?\s*([a-z][a-z\s_-]{1,40})/
+    /(?:find|look for|search for|track down|mine|dig up|forage for|gather|collect|harvest)\s+(?:a|an|some)?\s*([a-z][a-z\s_-]{1,48})/,
+    /(?:craft|make|build|shape|assemble|forge|smelt|brew|prepare)\s+(?:a|an|some)?\s*([a-z][a-z\s_-]{1,48})/
   ];
   for (const pattern of patterns) {
     const match = normalized.match(pattern);
-    if (match?.[1]) {
-      const candidate = match[1].replace(/\b(with|from|using|near|at|on|into|out of)\b.*$/, "").trim();
-      if (candidate && !isLikelyCommonWord(candidate)) return candidate;
-    }
+    const candidate = sanitizeCandidate(match?.[1] ?? null);
+    if (candidate && !isLikelyCommonWord(candidate)) return candidate;
   }
 
   const tokens = normalized.match(/\b([a-z][a-z_-]{2,})\b/g) ?? [];
-  const filtered = tokens.filter((token) => !COMMON_WORDS.has(token));
-  if (intent === "MINE") return filtered.find((token) => !["rock", "stone", "ore", "quarry"].includes(token)) ?? null;
-  if (intent === "FORAGE" || intent === "SCOUT") return filtered.find((token) => !["nearby", "patch", "terrain", "brush"].includes(token)) ?? null;
-  if (intent === "BUILD" || intent === "CRAFT_RECIPE") return filtered.find((token) => !["tool", "recipe", "craft", "build"].includes(token)) ?? null;
-  return filtered[0] ?? null;
+  const filtered = tokens.filter((token) => !COMMON_WORDS.has(token) && !SEARCH_DIRECTIVE_WORDS.has(token));
+  if (!filtered.length) return null;
+  const picked = intent === "MINE"
+    ? filtered.find((token) => !["rock", "stone", "ore", "quarry"].includes(token))
+    : intent === "FORAGE"
+      ? filtered.find((token) => !["patch", "terrain", "brush"].includes(token))
+      : intent === "BUILD" || intent === "CRAFT_RECIPE"
+        ? filtered.find((token) => !["tool", "recipe", "craft", "build"].includes(token))
+        : filtered[0];
+  const candidate = sanitizeCandidate(picked ?? null);
+  return candidate && !isLikelyCommonWord(candidate) ? candidate : null;
+}
+
+function buildUnderstanding(note: string, intent: string, nearbyTerrain: string[], canonical: DiscoverySeedRecord | null, snapshot: ContentSnapshot): ActionUnderstanding {
+  const broadSearch = broadSearchLikely(note, intent);
+  const objective = inferObjective(note, intent);
+  const specificCandidate = canonical?.aliases?.[0] ?? extractCandidatePhrase(note, intent, broadSearch);
+  const herbLikeTarget = isHerbLikeCandidate(specificCandidate, snapshot) || canonical?.targetKey === "unidentified_herb";
+  const targetKey = canonical?.targetKey ?? (herbLikeTarget ? "unidentified_herb" : specificCandidate ? slugifyWords(specificCandidate) : null);
+  const targetType: ActionUnderstanding["targetType"] = targetKey
+    ? intent === "MINE" || objective === "FIND_SPECIFIC_RESOURCE" || objective === "HARVEST_RESOURCE"
+      ? "RESOURCE"
+      : "ITEM"
+    : "NONE";
+  const canCreateContent = Boolean(targetKey) && !broadSearch && ["SCOUT", "FORAGE", "MINE", "CRAFT_RECIPE", "BUILD"].includes(intent);
+  return {
+    objective,
+    targetType,
+    targetKey,
+    broadSearch,
+    canCreateContent,
+    searchTags: extractSearchTags(note, nearbyTerrain),
+    observationBias: broadSearch ? (objective === "FIND_COLLECTIBLES" ? "collectibles" : "survey") : "specific"
+  };
 }
 
 function pickDynamicSkill(text: string, intent: string, canonical: DiscoverySeedRecord | null) {
@@ -387,8 +582,9 @@ function pickDynamicSkill(text: string, intent: string, canonical: DiscoverySeed
   return null;
 }
 
-function buildDynamicItem(candidate: string, intent: string, nearbyTerrain: string[], canonical: DiscoverySeedRecord | null) {
+function buildDynamicItem(candidate: string, intent: string, nearbyTerrain: string[], canonical: DiscoverySeedRecord | null, snapshot: ContentSnapshot) {
   if (canonical?.item) return canonical.item;
+  if (isHerbLikeCandidate(candidate, snapshot)) return buildUnidentifiedHerbItem(snapshot);
   if (!candidate || isLikelyCommonWord(candidate)) return null;
   const itemKey = slugifyWords(candidate);
   const terrain = uniqueList([
@@ -463,15 +659,16 @@ function buildRecipeHint(text: string, intent: string, item: DynamicItemRecord |
   } satisfies RecipeRecord;
 }
 
-function buildAnalysis(note: string, intent: string, nearbyTerrain: string[], knownItems: string[], knownSkills: string[], snapshot: ContentSnapshot) {
+function buildAnalysis(note: string, intent: string, nearbyTerrain: string[], knownItems: string[], knownSkills: string[], snapshot: ContentSnapshot): AnalysisResult {
   const canonical = detectCanonicalDiscovery(note, snapshot);
-  const candidate = extractCandidatePhrase(note, intent) ?? canonical?.aliases?.[0] ?? null;
+  const understanding = buildUnderstanding(note, intent, nearbyTerrain, canonical, snapshot);
+  const candidate = canonical?.aliases?.[0] ?? extractCandidatePhrase(note, intent, understanding.broadSearch);
   const proposals: Proposal[] = [];
-  const item = candidate ? buildDynamicItem(candidate, intent, nearbyTerrain, canonical) : null;
-  const skill = pickDynamicSkill(note, intent, canonical);
-  const recipe = buildRecipeHint(note, intent, item);
+  const item = understanding.canCreateContent && candidate ? buildDynamicItem(candidate, intent, nearbyTerrain, canonical, snapshot) : canonical?.item ?? null;
+  const skill = understanding.canCreateContent ? pickDynamicSkill(note, intent, canonical) : canonical?.skill ?? null;
+  const recipe = understanding.canCreateContent ? buildRecipeHint(note, intent, item) : null;
 
-  if (item && !knownItems.includes(item.itemKey)) {
+  if (item && understanding.canCreateContent && !knownItems.includes(item.itemKey)) {
     proposals.push({
       type: "item",
       key: item.itemKey,
@@ -486,7 +683,7 @@ function buildAnalysis(note: string, intent: string, nearbyTerrain: string[], kn
     });
   }
 
-  if (skill && !knownSkills.includes(skill.skillKey)) {
+  if (skill && understanding.canCreateContent && !knownSkills.includes(skill.skillKey)) {
     proposals.push({
       type: "skill",
       key: skill.skillKey,
@@ -498,7 +695,7 @@ function buildAnalysis(note: string, intent: string, nearbyTerrain: string[], kn
     });
   }
 
-  if (recipe && !snapshot.recipes[recipe.recipeKey]) {
+  if (recipe && understanding.canCreateContent && !snapshot.recipes[recipe.recipeKey]) {
     proposals.push({
       type: "recipe",
       key: recipe.recipeKey,
@@ -510,12 +707,33 @@ function buildAnalysis(note: string, intent: string, nearbyTerrain: string[], kn
     });
   }
 
+  const target = understanding.targetKey && candidate
+    ? { text: candidate, normalizedKey: understanding.targetKey, type: item ? "item_candidate" : understanding.targetType.toLowerCase() }
+    : null;
+  const confidence = proposals.length
+    ? Math.max(...proposals.map((proposal) => proposal.confidence))
+    : canonical
+      ? 0.72
+      : understanding.broadSearch
+        ? 0.81
+        : understanding.targetKey
+          ? 0.61
+          : 0.32;
+  const message = proposals.length
+    ? `Generated ${proposals.length} canonical content proposal(s).`
+    : understanding.broadSearch
+      ? understanding.objective === "FIND_COLLECTIBLES"
+        ? "Broad collectible search detected. Resolve this as a scouting/foraging opportunity, not a direct item creation."
+        : "Broad scouting pass detected. Resolve this as observations, signs, and occasional opportunities."
+      : "No stable content proposal was inferred from that note.";
+
   return {
     intent,
-    target: candidate ? { text: candidate, normalizedKey: slugifyWords(candidate), type: item ? "item_candidate" : "unknown" } : null,
-    confidence: proposals.length ? Math.max(...proposals.map((proposal) => proposal.confidence)) : canonical ? 0.6 : 0.32,
+    target,
+    confidence,
     proposals,
-    message: proposals.length ? `Generated ${proposals.length} canonical content proposal(s).` : "No stable content proposal was inferred from that note."
+    message,
+    understanding
   };
 }
 
@@ -573,6 +791,33 @@ app.post("/api/v1/ai/suggest-skill", (req, res) => {
   });
 });
 
+app.post("/api/v1/ai/understand-action", async (req, res) => {
+  const requestId = getRequestId(req);
+  const note = String(req.body.note ?? req.body.text ?? "");
+  const intent = String(req.body.intent ?? "GENERAL").toUpperCase();
+  const nearbyTerrain = Array.isArray(req.body.nearbyTerrain) ? req.body.nearbyTerrain.map((value: unknown) => normalizeText(String(value))) : [];
+  const knownItems = Array.isArray(req.body.knownItems) ? req.body.knownItems.map((value: unknown) => String(value)) : [];
+  const knownSkills = Array.isArray(req.body.knownSkills) ? req.body.knownSkills.map((value: unknown) => String(value).toUpperCase()) : [];
+  const snapshot = await getContentSnapshot();
+  const analysis = buildAnalysis(note, intent, nearbyTerrain, knownItems, knownSkills, snapshot);
+  sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, {
+    result: {
+      model: "frontier-discovery-rules-v3",
+      confidence: analysis.confidence,
+      intent: analysis.intent,
+      objective: analysis.understanding.objective,
+      target: analysis.target,
+      targetType: analysis.understanding.targetType,
+      targetKey: analysis.understanding.targetKey,
+      broadSearch: analysis.understanding.broadSearch,
+      canCreateContent: analysis.understanding.canCreateContent,
+      searchTags: analysis.understanding.searchTags,
+      observationBias: analysis.understanding.observationBias,
+      message: analysis.message
+    }
+  });
+});
+
 app.post("/api/v1/ai/analyze-action", async (req, res) => {
   const requestId = getRequestId(req);
   const note = String(req.body.note ?? req.body.text ?? "");
@@ -584,10 +829,17 @@ app.post("/api/v1/ai/analyze-action", async (req, res) => {
   const analysis = buildAnalysis(note, intent, nearbyTerrain, knownItems, knownSkills, snapshot);
   sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, {
     result: {
-      model: "frontier-discovery-rules-v2",
+      model: "frontier-discovery-rules-v3",
       confidence: analysis.confidence,
       intent: analysis.intent,
       target: analysis.target,
+      objective: analysis.understanding.objective,
+      targetType: analysis.understanding.targetType,
+      targetKey: analysis.understanding.targetKey,
+      broadSearch: analysis.understanding.broadSearch,
+      canCreateContent: analysis.understanding.canCreateContent,
+      searchTags: analysis.understanding.searchTags,
+      observationBias: analysis.understanding.observationBias,
       proposals: analysis.proposals,
       message: analysis.message
     }
@@ -609,7 +861,7 @@ app.post("/api/v1/ai/discover-content", async (req, res) => {
 
   sendSuccess(res, SERVICE_NAME, SERVICE_VERSION, requestId, {
     result: {
-      model: "frontier-discovery-rules-v2",
+      model: "frontier-discovery-rules-v3",
       confidence: analysis.confidence,
       content: {
         item: firstItem,

@@ -80,84 +80,80 @@ function parseJson<T>(value: unknown, fallback: T): T {
 async function ensureWorldTables() {
   if (!airtableEnabled() || worldTablesReady) return;
 
-  await Promise.all([
-    airtableEnsureTable(AIRTABLE_WORLD_REGIONS_TABLE, [
-      { name: "regionKey", type: "singleLineText" },
-      { name: "worldId", type: "singleLineText" },
-      { name: "regionId", type: "singleLineText" },
-      { name: "name", type: "singleLineText" },
-      { name: "biome", type: "singleLineText" },
-      { name: "dangerLevel", type: "number", options: { precision: 0 } },
-      { name: "gridSize", type: "number", options: { precision: 0 } },
-      { name: "detailSize", type: "number", options: { precision: 0 } },
-      { name: "seedJson", type: "multilineText" },
-      { name: "updatedAt", type: "singleLineText" }
-    ]),
-    airtableEnsureTable(AIRTABLE_WORLD_TILES_TABLE, [
-      { name: "tileKey", type: "singleLineText" },
-      { name: "worldId", type: "singleLineText" },
-      { name: "regionId", type: "singleLineText" },
-      { name: "layer", type: "singleLineText" },
-      { name: "tileX", type: "number", options: { precision: 0 } },
-      { name: "tileY", type: "number", options: { precision: 0 } },
-      { name: "tileZ", type: "number", options: { precision: 0 } },
-      { name: "detailX", type: "number", options: { precision: 0 } },
-      { name: "detailY", type: "number", options: { precision: 0 } },
-      { name: "detailZ", type: "number", options: { precision: 0 } },
-      { name: "chunkX", type: "number", options: { precision: 0 } },
-      { name: "chunkY", type: "number", options: { precision: 0 } },
-      { name: "size", type: "number", options: { precision: 0 } },
-      { name: "parentTileKey", type: "singleLineText" },
-      { name: "kind", type: "singleLineText" },
-      { name: "walkable", type: "checkbox" },
-      { name: "resourceType", type: "singleLineText" },
-      { name: "updatedAt", type: "singleLineText" }
-    ]),
-    airtableEnsureTable(AIRTABLE_WORLD_OBJECTS_TABLE, [
-      { name: "objectId", type: "singleLineText" },
-      { name: "worldId", type: "singleLineText" },
-      { name: "regionId", type: "singleLineText" },
-      { name: "type", type: "singleLineText" },
-      { name: "x", type: "number", options: { precision: 0 } },
-      { name: "y", type: "number", options: { precision: 0 } },
-      { name: "z", type: "number", options: { precision: 0 } },
-      { name: "subX", type: "number", options: { precision: 0 } },
-      { name: "subY", type: "number", options: { precision: 0 } },
-      { name: "subZ", type: "number", options: { precision: 0 } },
-      { name: "placedBy", type: "singleLineText" },
-      { name: "metaJson", type: "multilineText" },
-      { name: "updatedAt", type: "singleLineText" }
-    ]),
-    airtableEnsureTable(AIRTABLE_PLAYER_PRESENCE_TABLE, [
-      { name: "presenceKey", type: "singleLineText" },
-      { name: "characterId", type: "singleLineText" },
-      { name: "accountId", type: "singleLineText" },
-      { name: "worldId", type: "singleLineText" },
-      { name: "regionId", type: "singleLineText" },
-      { name: "x", type: "number", options: { precision: 0 } },
-      { name: "y", type: "number", options: { precision: 0 } },
-      { name: "z", type: "number", options: { precision: 0 } },
-      { name: "updatedAt", type: "singleLineText" }
-    ])
+  await airtableEnsureTable(AIRTABLE_WORLD_REGIONS_TABLE, [
+    { name: "regionKey", type: "singleLineText" },
+    { name: "worldId", type: "singleLineText" },
+    { name: "regionId", type: "singleLineText" },
+    { name: "name", type: "singleLineText" },
+    { name: "biome", type: "singleLineText" },
+    { name: "dangerLevel", type: "number", options: { precision: 0 } },
+    { name: "gridSize", type: "number", options: { precision: 0 } },
+    { name: "detailSize", type: "number", options: { precision: 0 } },
+    { name: "seedJson", type: "multilineText" },
+    { name: "updatedAt", type: "singleLineText" }
+  ]);
+  await airtableEnsureTable(AIRTABLE_WORLD_TILES_TABLE, [
+    { name: "tileKey", type: "singleLineText" },
+    { name: "worldId", type: "singleLineText" },
+    { name: "regionId", type: "singleLineText" },
+    { name: "layer", type: "singleLineText" },
+    { name: "tileX", type: "number", options: { precision: 0 } },
+    { name: "tileY", type: "number", options: { precision: 0 } },
+    { name: "tileZ", type: "number", options: { precision: 0 } },
+    { name: "detailX", type: "number", options: { precision: 0 } },
+    { name: "detailY", type: "number", options: { precision: 0 } },
+    { name: "detailZ", type: "number", options: { precision: 0 } },
+    { name: "chunkX", type: "number", options: { precision: 0 } },
+    { name: "chunkY", type: "number", options: { precision: 0 } },
+    { name: "size", type: "number", options: { precision: 0 } },
+    { name: "parentTileKey", type: "singleLineText" },
+    { name: "kind", type: "singleLineText" },
+    { name: "walkable", type: "checkbox" },
+    { name: "resourceType", type: "singleLineText" },
+    { name: "updatedAt", type: "singleLineText" }
+  ]);
+  await airtableEnsureTable(AIRTABLE_WORLD_OBJECTS_TABLE, [
+    { name: "objectId", type: "singleLineText" },
+    { name: "worldId", type: "singleLineText" },
+    { name: "regionId", type: "singleLineText" },
+    { name: "type", type: "singleLineText" },
+    { name: "x", type: "number", options: { precision: 0 } },
+    { name: "y", type: "number", options: { precision: 0 } },
+    { name: "z", type: "number", options: { precision: 0 } },
+    { name: "subX", type: "number", options: { precision: 0 } },
+    { name: "subY", type: "number", options: { precision: 0 } },
+    { name: "subZ", type: "number", options: { precision: 0 } },
+    { name: "placedBy", type: "singleLineText" },
+    { name: "metaJson", type: "multilineText" },
+    { name: "updatedAt", type: "singleLineText" }
+  ]);
+  await airtableEnsureTable(AIRTABLE_PLAYER_PRESENCE_TABLE, [
+    { name: "presenceKey", type: "singleLineText" },
+    { name: "characterId", type: "singleLineText" },
+    { name: "accountId", type: "singleLineText" },
+    { name: "worldId", type: "singleLineText" },
+    { name: "regionId", type: "singleLineText" },
+    { name: "x", type: "number", options: { precision: 0 } },
+    { name: "y", type: "number", options: { precision: 0 } },
+    { name: "z", type: "number", options: { precision: 0 } },
+    { name: "updatedAt", type: "singleLineText" }
   ]);
 
-  await Promise.all(
-    WORLD_REGIONS.map(async (region) => {
-      const regionKey = `${region.worldId}:${region.regionId}`;
-      await airtableUpsertByField(AIRTABLE_WORLD_REGIONS_TABLE, "regionKey", regionKey, {
-        regionKey,
-        worldId: region.worldId,
-        regionId: region.regionId,
-        name: region.name,
-        biome: region.biome,
-        dangerLevel: Number(region.dangerLevel ?? 1),
-        gridSize: REGION_GRID_SIZE,
-        detailSize: TILE_DETAIL_GRID_SIZE,
-        seedJson: JSON.stringify(region),
-        updatedAt: nowIso()
-      });
-    })
-  );
+  for (const region of WORLD_REGIONS) {
+    const regionKey = `${region.worldId}:${region.regionId}`;
+    await airtableUpsertByField(AIRTABLE_WORLD_REGIONS_TABLE, "regionKey", regionKey, {
+      regionKey,
+      worldId: region.worldId,
+      regionId: region.regionId,
+      name: region.name,
+      biome: region.biome,
+      dangerLevel: Number(region.dangerLevel ?? 1),
+      gridSize: REGION_GRID_SIZE,
+      detailSize: TILE_DETAIL_GRID_SIZE,
+      seedJson: JSON.stringify(region),
+      updatedAt: nowIso()
+    });
+  }
 
   const existingBoard = await airtableFindRecordByField<Record<string, unknown>>(AIRTABLE_WORLD_OBJECTS_TABLE, "objectId", "obj_town_board");
   if (!existingBoard) {

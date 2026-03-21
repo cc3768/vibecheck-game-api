@@ -1,4 +1,14 @@
-import { SERVICE_VERSION, airtableEnabled, airtableEnsureTable, airtableUpsertByField, createServiceApp, getRequestId, sendError, sendSuccess } from "../../../packages/shared/src/index";
+import {
+  SERVICE_VERSION,
+  airtableEnabled,
+  airtableEnsureTable,
+  airtableListRecords as sharedAirtableListRecords,
+  airtableUpsertByField,
+  createServiceApp,
+  getRequestId,
+  sendError,
+  sendSuccess
+} from "../../../packages/shared/src/index";
 import { SEED_DISCOVERIES, SEED_HERB_CATALOG, SEED_INTENT_SKILLS, SEED_ITEMS, SEED_SKILLS, SEED_SKILL_PREREQS, type DiscoverySeedRecord, type DynamicItemRecord, type DynamicSkillRecord, type HerbCatalogEntry, type ItemMetaRecord, type RecipeRecord } from "./seed";
 
 const SERVICE_NAME = "content-system";
@@ -69,12 +79,8 @@ function parseJson<T>(value: unknown, fallback: T): T {
 }
 
 function airtableConfig() {
-  const apiKey = process.env.AIRTABLE_TOKEN ?? process.env.AIRTABLE_API_KEY ?? "";
-  const baseId = process.env.AIRTABLE_BASE_ID ?? "";
-  if (!apiKey || !baseId) return null;
+  if (!airtableEnabled()) return null;
   return {
-    apiKey,
-    baseId,
     tableItems: process.env.AIRTABLE_TABLE_ITEMS ?? "Items",
     tableSkills: process.env.AIRTABLE_TABLE_SKILLS ?? "Skills",
     tableRecipes: process.env.AIRTABLE_TABLE_RECIPES ?? "Recipes",
@@ -165,21 +171,8 @@ async function ensureAirtableContentTables() {
 }
 
 async function airtableListRecords(tableName: string) {
-  const cfg = airtableConfig();
-  if (!cfg) return [] as AirtableRecord[];
-  const results: AirtableRecord[] = [];
-  let offset = "";
-  do {
-    const url = new URL(`https://api.airtable.com/v0/${cfg.baseId}/${encodeURIComponent(tableName)}`);
-    url.searchParams.set("pageSize", "100");
-    if (offset) url.searchParams.set("offset", offset);
-    const response = await fetch(url.toString(), { headers: { Authorization: `Bearer ${cfg.apiKey}` } });
-    if (!response.ok) throw new Error(`Airtable ${tableName} fetch failed with ${response.status}`);
-    const json = (await response.json()) as { records?: AirtableRecord[]; offset?: string };
-    results.push(...(json.records ?? []));
-    offset = json.offset ?? "";
-  } while (offset);
-  return results;
+  const rows = await sharedAirtableListRecords<Record<string, unknown>>(tableName);
+  return rows.records.map((record) => ({ id: record.id, fields: record.fields }));
 }
 
 function buildSeedAliases() {

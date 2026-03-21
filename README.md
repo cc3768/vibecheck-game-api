@@ -35,6 +35,11 @@ npm run dev:all
 - Redis-backed persistence is enabled for accounts, sessions, player presence, world regions, world tiles, world objects, and AI-generated content.
 - World storage is 3D-ready: region map uses 12x12 tiles and each region tile can resolve to a 12x12 detail grid (`z` supported, currently used as `0`).
 
+## Documentation
+
+- Core launch and operations: `docs/LAUNCH_AND_CORE.md`
+- Full system docs index: `docs/README.md`
+
 
 ## Install note
 

@@ -34,6 +34,8 @@ const FALLBACK_SKILL_PREREQS: Record<string, string[]> = {
 };
 
 const FALLBACK_INTENT_SKILLS: Record<string, string[]> = {
+  FISH: ["FISHING", "SURVIVAL"],
+  COOK_FISH: ["COOKING", "FISHING"],
   OBSERVE: ["GENERAL"],
   SCOUT: ["GENERAL", "EXPLORATION"],
   FORAGE: ["FORAGING", "SURVIVAL"],
@@ -56,10 +58,24 @@ const FALLBACK_INTENT_SKILLS: Record<string, string[]> = {
 };
 
 const FALLBACK_ITEM_META: Record<string, { name: string; description: string }> = {
+  raw_fish: { name: "Raw Fish", description: "A freshly caught fish, still wet from the water." },
+  cooked_fish: { name: "Cooked Fish", description: "A fish roasted over a fire until it flakes apart." },
+  cooked_perch: { name: "Cooked Perch", description: "A river perch roasted over coals — firm and fragrant." },
+  cooked_catfish: { name: "Cooked Catfish", description: "Catfish roasted whole, smoky and rich." },
+  charred_fish: { name: "Charred Fish", description: "A fish badly burnt over an uncontrolled fire. Still edible, barely." },
+  small_fish: { name: "Small Fish", description: "A small catch — bony but edible." },
+  river_perch: { name: "River Perch", description: "A firm-fleshed river fish with striped sides." },
+  catfish: { name: "Catfish", description: "A whiskered bottom-dweller, good eating if you gut it right." },
+  mudfish: { name: "Mudfish", description: "A murky-water fish. Edible but unpleasant." },
+  fishing_line: { name: "Fishing Line", description: "A length of twisted fiber line, usable for a basic fishing rig." },
+  fishing_hook: { name: "Fishing Hook", description: "A simple bent-bone or stone hook for catching fish." },
+  fishing_rod: { name: "Fishing Rod", description: "A sturdy rod with line attached, ready for casting." },
+  bait: { name: "Bait", description: "Grubs, worms, or scraps suitable for baiting a hook." },
   unidentified_herb: { name: "Unidentified Herb", description: "A fresh plant you have not classified yet." },
   raw_herb: { name: "Raw Herb", description: "A loose herb fit for simple medicine or tea." },
   stem_fiber: { name: "Stem Fiber", description: "Tough plant fibers useful in primitive craft." },
   bitter_root: { name: "Bitter Root", description: "Edible, but unpleasant and sharp on the tongue." },
+  wild_berry: { name: "Wild Berry", description: "Small tart berries picked from a bush. Edible, though some are more sour than sweet." },
   strange_seed: { name: "Strange Seed", description: "A seed of unknown origin that may sprout later." },
   fresh_water: { name: "Fresh Water", description: "Clear water collected from a nearby source." },
   bark_strip: { name: "Bark Strip", description: "Rough bark stripped from green wood." },
@@ -417,6 +433,7 @@ function explicitIntent(note: string) {
   if (/(UNPACK|UNWRAP|OPEN|BREAK APART|BREAK DOWN|SEPARATE|SORT) .*HERB/.test(text) || /HERB BUNDLE/.test(text) && /(UNPACK|OPEN|BREAK|SORT|UNTIE|UNWRAP)/.test(text)) return "UNPACK_HERB_BUNDLE";
   if (/(IDENTIF|INSPECT|APPRAIS|ANALYZ).*(HERB|PLANT)|UNIDENTIF/.test(text)) return "IDENTIFY_HERB";
   if (/(SPLIT|CUT|SHAVE).*(WOOD|LOG)|KINDLING/.test(text)) return "SPLIT_ITEM";
+  if (/(COOK|ROAST|FRY|SMOKE|GRILL|SEAR).*(FISH|PERCH|CATFISH|MUDFISH)|COOK.*RAW.FISH|ROAST.*FISH/.test(text)) return "COOK_FISH";
   if (/(TEA|BREW|STEEP|INFUSE)/.test(text)) return "BREW_TEA";
   if (/(REST|SIT|CATCH MY BREATH|PAUSE|SETTLE DOWN)/.test(text)) return "REST";
   if (/(LOOK AROUND|SCOUT|SURVEY|SEARCH THE AREA|OBSERVE THE AREA|CHECK THE AREA)/.test(text)) return "SCOUT";
@@ -427,6 +444,7 @@ function explicitIntent(note: string) {
   if (/(MINE|ORE|STONE|ROCK|QUARRY)/.test(text)) return "MINE";
   if (/(CRAFT|MAKE|ASSEMBLE|SMELT|FORGE|COOK|RECIPE)/.test(text)) return "CRAFT_RECIPE";
   if (/(BUILD|PLACE|WALL|BLOCK|CAMPFIRE|STRUCTURE|FORTIFY)/.test(text)) return "BUILD";
+  if (/(FISH|CAST|HOOK|ANGLE|NET|CATCH FISH|THROW LINE)/.test(text)) return "FISH";
   if (/(TALK|CHAT|ASK|GREET|BARTER|TRADE)/.test(text)) return "SOCIAL";
   if (/(RITUAL|SIGIL|CHANT|ALTAR|OFFERING)/.test(text)) return "RITUAL";
   if (/(MAGIC|SPELL|ARCANE|FOCUS)/.test(text)) return "MAGIC";
@@ -438,10 +456,15 @@ function classifyIntent(draft: ReturnType<typeof parseDraft>) {
   const fromNote = explicitIntent(draft.note);
   if (fromNote !== "GENERAL") return fromNote;
   switch (draft.primarySkill) {
+    case "FISHING": return "FISH";
     case "FORAGING": return "FORAGE";
     case "WOODCUTTING": return "WOODCUT";
     case "MINING": return "MINE";
-    case "COOKING": return draft.note ? "BREW_TEA" : "CRAFT_RECIPE";
+    case "COOKING": {
+      const n = normalizeText(draft.note);
+      if (/(fish|perch|catfish|mudfish)/.test(n)) return "COOK_FISH";
+      return draft.note ? "BREW_TEA" : "CRAFT_RECIPE";
+    }
     case "CRAFTING": return "CRAFT_RECIPE";
     case "BUILDING": return "BUILD";
     case "SOCIAL": return "SOCIAL";
@@ -456,6 +479,7 @@ function categoryForIntent(intent: string) {
   switch (intent) {
     case "SCOUT":
     case "FORAGE":
+    case "FISH":
     case "WOODCUT":
     case "MINE":
     case "WATER_COLLECT":
@@ -468,6 +492,7 @@ function categoryForIntent(intent: string) {
       return "MANIPULATION";
     case "CRAFT_RECIPE":
     case "BREW_TEA":
+    case "COOK_FISH":
       return "CRAFTING";
     case "BUILD":
       return "BUILDING";
@@ -538,12 +563,38 @@ function herbInventoryKeyFromNote(inventory: Record<string, number>, note: strin
   return herbKeys[0] ?? null;
 }
 
-async function resolveRecipeForAction(character: CharacterRecord, plan: Omit<ActionPlan, "recipe" | "dropTarget" | "splitTarget" | "allowed" | "reasons">) {
+// Search contentCache.recipes locally before hitting production-system, so
+// seed/runtime recipes (fishing line, rod, etc.) resolve without the shared package.
+function findRecipeInCache(note: string): RecipeRecord | null {
+  const normalized = normalizeText(note);
+  if (!normalized) return null;
+  const tokens = normalized.split(" ").filter(Boolean);
+  let best: { recipe: RecipeRecord; score: number } | null = null;
+  for (const recipe of Object.values(contentCache.recipes ?? {})) {
+    const hay = [recipe.recipeKey, recipe.name, ...(recipe.keywords ?? [])].map(normalizeText).join(" ");
+    let score = 0;
+    if (hay.includes(normalized)) score += normalized.length + 10;
+    for (const token of tokens) {
+      if (hay.includes(token)) score += token.length + 1;
+    }
+    if (score > 0 && (!best || score > best.score)) best = { recipe, score };
+  }
+  return best?.recipe ?? null;
+}
+
+async function resolveRecipeForAction(character: CharacterRecord, plan: Omit<ActionPlan, "recipe" | "dropTarget" | "splitTarget" | "allowed" | "reasons">, simulatedInventory?: Record<string, number>) {
   const note = plan.note;
   if (!note) return null;
+  const inventory = simulatedInventory ?? character.inventory ?? {};
+
+  // Try local content cache first (covers seed recipes + runtime-created recipes)
+  const cached = findRecipeInCache(note);
+  if (cached) return cached;
+
+  // Fall back to production-system (covers RECIPE_DEFINITIONS from shared package)
   const discover = await serviceFetch<{ matches: RecipeRecord[] }>("production-system", "/api/v1/production/discover", "POST", {
     query: note,
-    availableItems: Object.entries(character.inventory ?? {}).map(([itemKey, amount]) => ({ itemKey, amount })),
+    availableItems: Object.entries(inventory).map(([itemKey, amount]) => ({ itemKey, amount })),
     nearbyObjects: plan.nearbyObjects
   });
   const unlocked = new Set((character.knowledge?.unlockedRecipes ?? []).map((value) => String(value)));
@@ -551,7 +602,7 @@ async function resolveRecipeForAction(character: CharacterRecord, plan: Omit<Act
   return best ?? null;
 }
 
-async function buildPlan(character: CharacterRecord, rawAction: ActionDraft): Promise<ActionPlan> {
+async function buildPlan(character: CharacterRecord, rawAction: ActionDraft, simulatedInventory?: Record<string, number>): Promise<ActionPlan> {
   await ensureContentCache();
   const draft = parseDraft(rawAction);
   const intent = classifyIntent(draft);
@@ -572,12 +623,13 @@ async function buildPlan(character: CharacterRecord, rawAction: ActionDraft): Pr
     }
   }
 
+  const effectiveInventory = simulatedInventory ?? character.inventory ?? {};
   let recipe: RecipeRecord | null = null;
   let discovery: DiscoveryRecord | null = null;
   let dropTarget: { itemKey: string; amount: number } | null = null;
   let splitTarget: { itemKey: string; amount: number } | null = null;
 
-  if (["OBSERVE", "SCOUT", "FORAGE", "MINE", "CRAFT_RECIPE", "BUILD"].includes(intent) && draft.note) {
+  if (["OBSERVE", "SCOUT", "FORAGE", "FISH", "MINE", "CRAFT_RECIPE", "BUILD"].includes(intent) && draft.note) {
     discovery = await discoverContent(draft.note, intent, nearbyTerrain, nearbyObjects, character);
     const discoveredSkillKey = discovery?.skill?.skillKey ? String(discovery.skill.skillKey).toUpperCase() : null;
     if (discoveredSkillKey && !contentCache.skillPrereqs[discoveredSkillKey]) {
@@ -592,26 +644,26 @@ async function buildPlan(character: CharacterRecord, rawAction: ActionDraft): Pr
   }
 
   if (intent === "DROP_ITEM") {
-    dropTarget = resolveInventoryTarget(character.inventory ?? {}, draft.note, []);
+    dropTarget = resolveInventoryTarget(effectiveInventory, draft.note, []);
     if (!dropTarget) {
       reasons.push("I couldn't tell which item you want to drop. Try 'drop: item_key x1'.");
-    } else if (Number(character.inventory[dropTarget.itemKey] ?? 0) < dropTarget.amount) {
-      reasons.push(`You only have ${Number(character.inventory[dropTarget.itemKey] ?? 0)} ${inventoryLabel(dropTarget.itemKey)}.`);
+    } else if (Number(effectiveInventory[dropTarget.itemKey] ?? 0) < dropTarget.amount) {
+      reasons.push(`You only have ${Number(effectiveInventory[dropTarget.itemKey] ?? 0)} ${inventoryLabel(dropTarget.itemKey)}.`);
     }
   }
 
   if (intent === "SPLIT_ITEM") {
-    splitTarget = resolveInventoryTarget(character.inventory ?? {}, draft.note, ["wood log", "log", "timber"]);
+    splitTarget = resolveInventoryTarget(effectiveInventory, draft.note, ["wood log", "log", "timber"]);
     if (!splitTarget || splitTarget.itemKey !== "wood_log") {
       reasons.push("You need at least 1 wood_log to split into kindling.");
     }
   }
 
-  if (intent === "UNPACK_HERB_BUNDLE" && Number(character.inventory.herb_bundle ?? 0) < 1) {
+  if (intent === "UNPACK_HERB_BUNDLE" && Number(effectiveInventory.herb_bundle ?? 0) < 1) {
     reasons.push("You do not have a herb bundle to unpack.");
   }
 
-  if (intent === "IDENTIFY_HERB" && Number(character.inventory.unidentified_herb ?? 0) < 1) {
+  if (intent === "IDENTIFY_HERB" && Number(effectiveInventory.unidentified_herb ?? 0) < 1) {
     reasons.push("You do not have any unidentified herbs to identify.");
   }
 
@@ -631,11 +683,28 @@ async function buildPlan(character: CharacterRecord, rawAction: ActionDraft): Pr
     reasons.push("This tile does not look like a useful foraging patch.");
   }
 
+  if (intent === "FISH") {
+    if (!nearbyTerrain.includes("water")) {
+      reasons.push("You need to be on or next to water to fish.");
+    }
+    if (discovery?.item?.requiredTerrain?.length) {
+      const matchesTerrain = discovery.item.requiredTerrain.some((t) => nearbyTerrain.includes(String(t).toLowerCase()));
+      if (!matchesTerrain) reasons.push(`${discovery.item.name} cannot be found in the water here.`);
+    }
+  }
+
   if (intent === "BREW_TEA") {
-    const herbKey = herbInventoryKeyFromNote(character.inventory ?? {}, draft.note);
+    const herbKey = herbInventoryKeyFromNote(effectiveInventory, draft.note);
     if (!nearbyObjects.includes("CAMPFIRE")) reasons.push("You need a campfire nearby to brew tea.");
-    if (Number(character.inventory.fresh_water ?? 0) < 1) reasons.push("You need fresh water in your inventory to brew tea.");
+    if (Number(effectiveInventory.fresh_water ?? 0) < 1) reasons.push("You need fresh water in your inventory to brew tea.");
     if (!herbKey) reasons.push("You need an herb in your inventory to brew tea.");
+  }
+
+  if (intent === "COOK_FISH") {
+    const fishKeys = ["raw_fish", "small_fish", "river_perch", "catfish", "mudfish"];
+    const hasFish = fishKeys.some((k) => Number(effectiveInventory[k] ?? 0) >= 1);
+    if (!nearbyObjects.includes("CAMPFIRE")) reasons.push("You need a campfire nearby to cook fish.");
+    if (!hasFish) reasons.push("You need a raw fish in your inventory to cook.");
   }
 
   if (intent === "CRAFT_RECIPE") {
@@ -648,9 +717,8 @@ async function buildPlan(character: CharacterRecord, rawAction: ActionDraft): Pr
       nearbyTerrain,
       nearbyObjects,
       discoveredSkills: Array.from(available),
-      discovery,
       requiredSkills
-    });
+    }, effectiveInventory);
 
     if (!recipe && discovery?.recipe) {
       recipe = discovery.recipe;
@@ -660,12 +728,12 @@ async function buildPlan(character: CharacterRecord, rawAction: ActionDraft): Pr
       reasons.push("No matching recipe was found for that note.");
     } else if (discovery?.recipe && recipe.recipeKey === discovery.recipe.recipeKey) {
       for (const input of recipe.inputs ?? []) {
-        const have = Number(character.inventory?.[input.itemKey] ?? 0);
+        const have = Number(effectiveInventory[input.itemKey] ?? 0);
         const need = Number(input.amount ?? 0);
         if (have < need) reasons.push(`Missing ${need - have} ${inventoryLabel(input.itemKey)}.`);
       }
       for (const tool of recipe.tools ?? []) {
-        if (Number(character.inventory?.[tool.toolKey] ?? 0) < 1) reasons.push(`Missing tool ${titleCaseLocal(tool.toolKey)}.`);
+        if (Number(effectiveInventory[tool.toolKey] ?? 0) < 1) reasons.push(`Missing tool ${titleCaseLocal(tool.toolKey)}.`);
       }
       if (recipe.station && recipe.station !== "FIELD" && !nearbyObjects.includes(String(recipe.station).toUpperCase())) {
         reasons.push(`You need ${titleCaseLocal(recipe.station)} nearby for this recipe.`);
@@ -677,7 +745,7 @@ async function buildPlan(character: CharacterRecord, rawAction: ActionDraft): Pr
         "POST",
         {
           recipeKey: recipe.recipeKey,
-          availableItems: Object.entries(character.inventory ?? {}).map(([itemKey, amount]) => ({ itemKey, amount })),
+          availableItems: Object.entries(effectiveInventory).map(([itemKey, amount]) => ({ itemKey, amount })),
           availableTools: Object.keys(character.inventory ?? {}).filter((key) => Number(character.inventory[key] ?? 0) > 0),
           nearbyObjects,
           stationContext: nearbyObjects
@@ -794,7 +862,8 @@ function resolveScout(character: CharacterRecord, plan: ActionPlan) {
   } satisfies ActionOutcome;
 }
 
-function resolveForage(character: CharacterRecord, plan: ActionPlan) {
+function resolveForage(character: CharacterRecord, plan: ActionPlan, inv?: Record<string, number>) {
+  const inventory = inv ?? character.inventory ?? {};
   const inventoryChanges: Record<string, number> = {};
   const vitalChanges: Record<string, number> = { stamina: -3 };
   const drawbacks = [{ type: "stamina", amount: -3, reason: "Foraging takes effort and attention." }];
@@ -804,6 +873,29 @@ function resolveForage(character: CharacterRecord, plan: ActionPlan) {
   const success = roll <= successChance;
   if (success) {
     const normalized = normalizeText(plan.note);
+    // Bait note: explicitly looking for worms/grubs near water or grass
+    const wantsBait = /(worm|grub|bait|lure)/.test(normalized);
+    const nearWet = plan.nearbyTerrain.some((t) => ["water", "grass"].includes(t));
+    const foundBait = (wantsBait || (nearWet && Math.random() < 0.12));
+    if (foundBait) {
+      inventoryChanges.bait = 1;
+      return {
+        category: plan.category,
+        intent: plan.intent,
+        success,
+        catastrophic: false,
+        roll,
+        successChance,
+        inventoryChanges,
+        vitalChanges,
+        rewards: asRewardList(inventoryChanges),
+        consumed: [],
+        drawbacks,
+        itemMeta: registerKnownMeta(inventoryChanges),
+        discoveredSkills: [],
+        message: "You turn over rocks and leaf litter and collect some grubs for bait."
+      } satisfies ActionOutcome;
+    }
     const found = plan.discovery?.item?.itemKey ?? (normalized.includes("berry") ? "wild_berry" : normalized.includes("root") ? "bitter_root" : normalized.includes("herb") ? "unidentified_herb" : plan.nearbyTerrain.includes("forest") ? "unidentified_herb" : "bitter_root");
     inventoryChanges[found] = 1;
     return {
@@ -863,16 +955,39 @@ function resolveWaterCollect(character: CharacterRecord, plan: ActionPlan) {
   } satisfies ActionOutcome;
 }
 
+function resolveWaterUse(character: CharacterRecord, plan: ActionPlan, inv?: Record<string, number>) {
+  const inventory = inv ?? character.inventory ?? {};
+  const hasWater = Number(inventory.fresh_water ?? 0) >= 1;
+  const inventoryChanges: Record<string, number> = hasWater ? { fresh_water: -1 } : {};
+  return {
+    category: plan.category,
+    intent: plan.intent,
+    success: hasWater,
+    catastrophic: false,
+    roll: Math.random(),
+    successChance: 1,
+    inventoryChanges,
+    vitalChanges: {},
+    rewards: [],
+    consumed: asConsumedList(inventoryChanges),
+    drawbacks: [],
+    itemMeta: registerKnownMeta(inventoryChanges),
+    message: hasWater
+      ? "You use the fresh water to wash and clean."
+      : "You have no fresh water to use."
+  } satisfies ActionOutcome;
+}
+
 function resolveWoodcut(character: CharacterRecord, plan: ActionPlan) {
   const inventoryChanges: Record<string, number> = {};
   const vitalChanges: Record<string, number> = { stamina: -5 };
   const drawbacks: Array<{ type: string; amount: number; reason: string }> = [{ type: "stamina", amount: -5, reason: "Chopping wood is physically demanding." }];
   const level = Math.max(1, getSkillLevel(character, plan.primarySkill));
   const successChance = Math.max(0.12, Math.min(0.91, 0.48 + (level - 1) * 0.07));
-  const catastrophic = Math.floor(Math.random() * 1_000_000) === 777777;
+  const catastrophicChance = 0.000001; // 1-in-a-million
   const roll = Math.random();
-  let success = roll <= successChance;
-  if (catastrophic) success = false;
+  const catastrophic = roll < catastrophicChance;
+  let success = !catastrophic && roll <= successChance;
 
   if (catastrophic) {
     vitalChanges.hp = -40;
@@ -1004,8 +1119,9 @@ function resolveDrop(plan: ActionPlan) {
 }
 
 function resolveSplit(character: CharacterRecord, plan: ActionPlan) {
-  const inventoryChanges: Record<string, number> = { wood_log: -1, kindling: 3, bark_strip: 1 };
-  const vitalChanges: Record<string, number> = { stamina: -2 };
+  const amount = Math.min(plan.splitTarget?.amount ?? 1, Number(character.inventory.wood_log ?? 0));
+  const inventoryChanges: Record<string, number> = { wood_log: -amount, kindling: amount * 3, bark_strip: amount };
+  const vitalChanges: Record<string, number> = { stamina: -2 * amount };
   return {
     category: plan.category,
     intent: plan.intent,
@@ -1017,9 +1133,11 @@ function resolveSplit(character: CharacterRecord, plan: ActionPlan) {
     vitalChanges,
     rewards: asRewardList(inventoryChanges),
     consumed: asConsumedList(inventoryChanges),
-    drawbacks: [{ type: "stamina", amount: -2, reason: "Splitting material still takes some effort." }],
+    drawbacks: [{ type: "stamina", amount: -2 * amount, reason: "Splitting material still takes some effort." }],
     itemMeta: registerKnownMeta(inventoryChanges),
-    message: "You split the log down into kindling and peel away a strip of bark."
+    message: amount > 1
+      ? `You split ${amount} logs down into kindling and peel away strips of bark.`
+      : "You split the log down into kindling and peel away a strip of bark."
   } satisfies ActionOutcome;
 }
 
@@ -1063,9 +1181,10 @@ function resolveIdentifyHerb(character: CharacterRecord, plan: ActionPlan) {
   } satisfies ActionOutcome;
 }
 
-function resolveBrewTea(character: CharacterRecord, plan: ActionPlan) {
-  const herbKey = herbInventoryKeyFromNote(character.inventory ?? {}, plan.note) ?? "raw_herb";
-  const inventoryChanges: Record<string, number> = { fresh_water: -1, [herbKey]: -1 };
+function resolveBrewTea(character: CharacterRecord, plan: ActionPlan, inv?: Record<string, number>) {
+  const inventory = inv ?? character.inventory ?? {};
+  const herbKey = herbInventoryKeyFromNote(inventory, plan.note) ?? "raw_herb";
+  const inventoryChanges: Record<string, number> = { fresh_water: -1, [herbKey ?? "raw_herb"]: -1 };
   const vitalChanges: Record<string, number> = { stamina: -2 };
   const drawbacks = [{ type: "stamina", amount: -2, reason: "Brewing takes time and attention." }];
   const level = Math.max(1, getSkillLevel(character, plan.primarySkill || "COOKING"));
@@ -1108,6 +1227,226 @@ function resolveBrewTea(character: CharacterRecord, plan: ActionPlan) {
     drawbacks,
     itemMeta: registerKnownMeta(inventoryChanges),
     message: "The mixture goes bitter and breaks down into charred slurry."
+  } satisfies ActionOutcome;
+}
+
+// Fish catalog: what can be caught and where
+const FISH_CATALOG: Array<{ itemKey: string; weight: number; terrain: string[]; minLevel?: number }> = [
+  { itemKey: "small_fish",   weight: 4, terrain: ["water"] },
+  { itemKey: "raw_fish",     weight: 3, terrain: ["water"] },
+  { itemKey: "river_perch",  weight: 2, terrain: ["water"] },
+  { itemKey: "catfish",      weight: 1, terrain: ["water"], minLevel: 2 },
+  { itemKey: "mudfish",      weight: 2, terrain: ["water"] }
+];
+
+function pickFish(note: string, nearbyTerrain: string[], level: number): string {
+  const upper = note.toUpperCase();
+  if (upper.includes("PERCH")) return "river_perch";
+  if (upper.includes("CATFISH") || upper.includes("CAT FISH")) return "catfish";
+  if (upper.includes("MUD")) return "mudfish";
+
+  const eligible = FISH_CATALOG.filter(
+    (f) => f.terrain.some((t) => nearbyTerrain.includes(t)) && (f.minLevel ?? 1) <= level
+  );
+  const pool = eligible.length ? eligible : FISH_CATALOG.filter((f) => !f.minLevel || f.minLevel <= 1);
+  const weighted: string[] = [];
+  for (const fish of pool) {
+    for (let i = 0; i < fish.weight; i++) weighted.push(fish.itemKey);
+  }
+  return randomPick(weighted) ?? "raw_fish";
+}
+
+function hasFishingGear(inventory: Record<string, number>): { hasRod: boolean; hasLine: boolean; hasHook: boolean; hasBait: boolean } {
+  return {
+    hasRod:  Number(inventory.fishing_rod  ?? 0) >= 1,
+    hasLine: Number(inventory.fishing_line ?? 0) >= 1,
+    hasHook: Number(inventory.fishing_hook ?? 0) >= 1,
+    hasBait: Number(inventory.bait         ?? 0) >= 1
+  };
+}
+
+function fishingGearBonus(gear: ReturnType<typeof hasFishingGear>): number {
+  let bonus = 0;
+  if (gear.hasRod)  bonus += 0.14;
+  if (gear.hasLine) bonus += 0.06;
+  if (gear.hasHook) bonus += 0.08;
+  if (gear.hasBait) bonus += 0.10;
+  return bonus;
+}
+
+function resolveFish(character: CharacterRecord, plan: ActionPlan, effectiveInventory?: Record<string, number>) {
+  const inventory = effectiveInventory ?? character.inventory ?? {};
+  const gear = hasFishingGear(inventory);
+  const level = Math.max(1, getSkillLevel(character, plan.primarySkill));
+
+  // Base success: 30% bare-handed, up to ~75% with full gear + high level
+  const successChance = Math.max(0.10, Math.min(0.82,
+    0.30
+    + (level - 1) * 0.05
+    + fishingGearBonus(gear)
+    + (plan.note.length >= 12 ? 0.04 : 0) // specific intent helps
+  ));
+
+  const staminaCost = gear.hasRod ? -3 : -5; // bare-hand fishing is harder
+  const vitalChanges: Record<string, number> = { stamina: staminaCost };
+  const drawbacks: Array<{ type: string; amount: number; reason: string }> = [
+    { type: "stamina", amount: staminaCost, reason: gear.hasRod ? "Fishing takes patience and focus." : "Fishing without a rod is exhausting work." }
+  ];
+
+  const roll = Math.random();
+  const success = roll <= successChance;
+
+  const inventoryChanges: Record<string, number> = {};
+
+  // Consume bait on each attempt if present
+  if (gear.hasBait) inventoryChanges.bait = -1;
+
+  if (success) {
+    const caught = plan.discovery?.item?.itemKey ?? pickFish(plan.note, plan.nearbyTerrain, level);
+    inventoryChanges[caught] = 1;
+
+    // Bonus catch: small chance of a second fish at higher levels
+    const bonusCatch = level >= 4 && Math.random() < 0.15;
+    if (bonusCatch) {
+      const bonus = pickFish("", plan.nearbyTerrain, level);
+      inventoryChanges[bonus] = (inventoryChanges[bonus] ?? 0) + 1;
+    }
+
+    const caughtName = plan.discovery?.item?.name ?? inventoryLabel(caught);
+    const message = bonusCatch
+      ? `You pull in ${caughtName} — and your line stays live long enough for a second catch.`
+      : plan.discovery?.item
+        ? `You wait out the current and land ${caughtName}.`
+        : `You wait patiently and pull up ${inventoryLabel(caught)}.`;
+
+    return {
+      category: plan.category,
+      intent: plan.intent,
+      success: true,
+      catastrophic: false,
+      roll,
+      successChance,
+      inventoryChanges,
+      vitalChanges,
+      rewards: asRewardList(inventoryChanges),
+      consumed: asConsumedList(inventoryChanges),
+      drawbacks,
+      itemMeta: mergeMetaMaps(registerKnownMeta(inventoryChanges), dynamicMetaRecord(plan.discovery?.item)),
+      discoveredSkills: [],
+      message
+    } satisfies ActionOutcome;
+  }
+
+  // Failed attempt messages
+  const failMessages = [
+    "You cast your line and wait, but nothing bites.",
+    "A tug on the line — then nothing. The catch got away.",
+    "The water looks promising but stays quiet.",
+    "You sit with the line for a while and come away empty-handed."
+  ];
+
+  return {
+    category: plan.category,
+    intent: plan.intent,
+    success: false,
+    catastrophic: false,
+    roll,
+    successChance,
+    inventoryChanges,
+    vitalChanges,
+    rewards: [],
+    consumed: asConsumedList(inventoryChanges),
+    drawbacks,
+    itemMeta: registerKnownMeta(inventoryChanges),
+    discoveredSkills: [],
+    message: randomPick(failMessages)
+  } satisfies ActionOutcome;
+}
+
+// Fish cooking — resolves which raw fish to consume and what cooked item to produce
+const FISH_COOK_MAP: Record<string, string> = {
+  river_perch: "cooked_perch",
+  catfish: "cooked_catfish",
+  raw_fish: "cooked_fish",
+  small_fish: "cooked_fish",
+  mudfish: "cooked_fish"
+};
+
+function pickRawFishFromInventory(inv: Record<string, number>, note: string): string | null {
+  const normalized = normalizeText(note);
+  const fishKeys = Object.keys(FISH_COOK_MAP);
+  // Explicit note match first
+  const explicit = fishKeys.find((k) => normalized.includes(normalizeText(k)));
+  if (explicit && Number(inv[explicit] ?? 0) >= 1) return explicit;
+  // Then any fish in inventory
+  return fishKeys.find((k) => Number(inv[k] ?? 0) >= 1) ?? null;
+}
+
+function resolveCookFish(character: CharacterRecord, plan: ActionPlan, inv?: Record<string, number>) {
+  const inventory = inv ?? character.inventory ?? {};
+  const rawKey = pickRawFishFromInventory(inventory, plan.note);
+  const level = Math.max(1, getSkillLevel(character, plan.primarySkill || "COOKING"));
+
+  if (!rawKey) {
+    return {
+      category: plan.category,
+      intent: plan.intent,
+      success: false,
+      catastrophic: false,
+      roll: 1,
+      successChance: 0,
+      inventoryChanges: {},
+      vitalChanges: {},
+      rewards: [],
+      consumed: [],
+      drawbacks: [],
+      itemMeta: {},
+      message: "You have no fish to cook."
+    } satisfies ActionOutcome;
+  }
+
+  const cookedKey = FISH_COOK_MAP[rawKey] ?? "cooked_fish";
+  const successChance = Math.max(0.35, Math.min(0.95, 0.55 + (level - 1) * 0.06 + (plan.nearbyObjects.includes("CAMPFIRE") ? 0.08 : 0)));
+  const roll = Math.random();
+  const success = roll <= successChance;
+  const vitalChanges: Record<string, number> = { stamina: -2 };
+  const drawbacks = [{ type: "stamina", amount: -2, reason: "Tending a fire takes patience." }];
+
+  if (success) {
+    const inventoryChanges: Record<string, number> = { [rawKey]: -1, [cookedKey]: 1 };
+    return {
+      category: plan.category,
+      intent: plan.intent,
+      success: true,
+      catastrophic: false,
+      roll,
+      successChance,
+      inventoryChanges,
+      vitalChanges,
+      rewards: asRewardList(inventoryChanges),
+      consumed: asConsumedList(inventoryChanges),
+      drawbacks,
+      itemMeta: mergeMetaMaps(registerKnownMeta(inventoryChanges)),
+      message: `You roast the ${inventoryLabel(rawKey)} over the fire and it comes out well.`
+    } satisfies ActionOutcome;
+  }
+
+  // Failed — fish is charred and wasted
+  const inventoryChanges: Record<string, number> = { [rawKey]: -1, charred_fish: 1 };
+  return {
+    category: plan.category,
+    intent: plan.intent,
+    success: false,
+    catastrophic: false,
+    roll,
+    successChance,
+    inventoryChanges,
+    vitalChanges,
+    rewards: asRewardList(inventoryChanges),
+    consumed: asConsumedList(inventoryChanges),
+    drawbacks,
+    itemMeta: registerKnownMeta(inventoryChanges),
+    message: "The fire runs too hot and the fish chars before you can pull it free."
   } satisfies ActionOutcome;
 }
 
@@ -1173,7 +1512,8 @@ function resolveMagicLike(plan: ActionPlan) {
   } satisfies ActionOutcome;
 }
 
-async function resolveCraftRecipe(character: CharacterRecord, plan: ActionPlan) {
+async function resolveCraftRecipe(character: CharacterRecord, plan: ActionPlan, effectiveInventory?: Record<string, number>) {
+  const inv = effectiveInventory ?? character.inventory ?? {};
   const recipe = plan.recipe;
   if (!recipe) {
     return {
@@ -1246,20 +1586,23 @@ async function resolveCraftRecipe(character: CharacterRecord, plan: ActionPlan) 
   } satisfies ActionOutcome;
 }
 
-function resolvePlan(character: CharacterRecord, plan: ActionPlan) {
+function resolvePlan(character: CharacterRecord, plan: ActionPlan, effectiveInventory?: Record<string, number>) {
+  const inv = effectiveInventory ?? character.inventory ?? {};
   switch (plan.intent) {
     case "OBSERVE": return resolveObservation(character, plan);
     case "SCOUT": return resolveScout(character, plan);
-    case "FORAGE": return resolveForage(character, plan);
-    case "WATER_COLLECT":
-    case "WATER_USE": return resolveWaterCollect(character, plan);
+    case "FORAGE": return resolveForage(character, plan, inv);
+    case "FISH": return resolveFish(character, plan, inv);
+    case "COOK_FISH": return resolveCookFish(character, plan, inv);
+    case "WATER_COLLECT": return resolveWaterCollect(character, plan);
+    case "WATER_USE": return resolveWaterUse(character, plan, inv);
     case "WOODCUT": return resolveWoodcut(character, plan);
     case "MINE": return resolveMine(character, plan);
     case "DROP_ITEM": return resolveDrop(plan);
     case "SPLIT_ITEM": return resolveSplit(character, plan);
     case "UNPACK_HERB_BUNDLE": return resolveUnpackHerbBundle();
     case "IDENTIFY_HERB": return resolveIdentifyHerb(character, plan);
-    case "BREW_TEA": return resolveBrewTea(character, plan);
+    case "BREW_TEA": return resolveBrewTea(character, plan, inv);
     case "BUILD": return resolveBuild(character, plan);
     case "REST": return resolveRest();
     case "RITUAL":
@@ -1324,7 +1667,7 @@ app.post("/api/v1/actions/resolve-queue", async (req, res) => {
 
     for (const [index, rawAction] of actions.entries()) {
       const parsed = parseDraft(rawAction);
-      const plan = await buildPlan(simulated, rawAction);
+      const plan = await buildPlan(simulated, rawAction, simulated.inventory);
       if (!plan.allowed) {
         results.push({
           index,
@@ -1343,7 +1686,7 @@ app.post("/api/v1/actions/resolve-queue", async (req, res) => {
         continue;
       }
 
-      const outcome = plan.intent === "CRAFT_RECIPE" ? await resolveCraftRecipe(simulated, plan) : resolvePlan(simulated, plan);
+      const outcome = plan.intent === "CRAFT_RECIPE" ? await resolveCraftRecipe(simulated, plan, simulated.inventory) : resolvePlan(simulated, plan, simulated.inventory);
       for (const [key, meta] of Object.entries(outcome.itemMeta ?? {})) aggregateItemMeta[key] = meta as { name: string; description: string };
       const xpAction = {
         actionType: parsed.actionType,

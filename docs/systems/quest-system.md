@@ -6,12 +6,12 @@
 
 ## Key Routes
 
-- `GET /api/v1/quest/:questId`
-- `POST /api/v1/quest/accept`
-- `POST /api/v1/quest/progress`
-- `POST /api/v1/quest/complete`
-- `POST /api/v1/quest/fail`
-- `GET /api/v1/quest/active/:characterId`
-- `POST /api/v1/quest/check-objective`
-- `POST /api/v1/quest/offer-from-npc`
+- `GET /api/v1/quest/:questId` — returns quest definition/state.
+- `POST /api/v1/quest/accept` — accepts quest for character.
+- `POST /api/v1/quest/progress` — updates objective progress.
+- `POST /api/v1/quest/complete` — marks quest complete.
+- `POST /api/v1/quest/fail` — marks quest failed.
+- `GET /api/v1/quest/active/:characterId` — returns active quests.
+- `POST /api/v1/quest/check-objective` — validates objective completion status.
+- `POST /api/v1/quest/offer-from-npc` — returns/creates npc quest offers.
 

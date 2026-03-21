@@ -6,10 +6,10 @@
 
 ## Key Routes
 
-- `POST /api/v1/chat/send`
-- `GET /api/v1/chat/channel/:channelId/history`
-- `POST /api/v1/chat/system-message`
-- `POST /api/v1/chat/npc-dialogue`
-- `POST /api/v1/chat/reward-notice`
-- `POST /api/v1/chat/quest-update`
+- `POST /api/v1/chat/send` — sends a player chat message.
+- `GET /api/v1/chat/channel/:channelId/history` — fetches channel history.
+- `POST /api/v1/chat/system-message` — emits system-level chat notice.
+- `POST /api/v1/chat/npc-dialogue` — emits npc dialogue message.
+- `POST /api/v1/chat/reward-notice` — emits reward notification message.
+- `POST /api/v1/chat/quest-update` — emits quest update message.
 

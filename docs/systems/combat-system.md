@@ -6,11 +6,11 @@
 
 ## Key Routes
 
-- `POST /api/v1/combat/start`
-- `POST /api/v1/combat/action`
-- `POST /api/v1/combat/resolve`
-- `GET /api/v1/combat/encounter/:encounterId`
-- `POST /api/v1/combat/retreat`
-- `POST /api/v1/combat/apply-status`
-- `POST /api/v1/combat/end`
+- `POST /api/v1/combat/start` — initializes a combat encounter state.
+- `POST /api/v1/combat/action` — records one combat turn/action.
+- `POST /api/v1/combat/resolve` — resolves encounter state progression.
+- `GET /api/v1/combat/encounter/:encounterId` — fetches encounter details.
+- `POST /api/v1/combat/retreat` — attempts encounter retreat flow.
+- `POST /api/v1/combat/apply-status` — applies combat status effect updates.
+- `POST /api/v1/combat/end` — finalizes and closes encounter.
 

@@ -88,6 +88,16 @@ app.post("/api/v1/session/login", asyncRoute(async (req, res) => {
   res.status(result.status).json(result.json);
 }));
 
+app.post("/api/v1/session/register", asyncRoute(async (req, res) => {
+  const requestId = getRequestId(req);
+  let result = await forward("login-system", "/api/v1/auth/register", "POST", requestId, req.body as LoginRequest);
+  const errorCode = (result.json as { error?: { code?: string } })?.error?.code;
+  if (result.status === 404 || errorCode === "UPSTREAM_EMPTY_RESPONSE" || errorCode === "UPSTREAM_INVALID_JSON") {
+    result = await forward("login-system", "/api/v1/auth/login", "POST", requestId, req.body as LoginRequest);
+  }
+  res.status(result.status).json(result.json);
+}));
+
 app.post("/api/v1/session/logout", asyncRoute(async (req, res) => {
   const result = await forward("login-system", "/api/v1/auth/logout", "POST", getRequestId(req), req.body);
   res.status(result.status).json(result.json);

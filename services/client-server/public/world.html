@@ -20,6 +20,8 @@
             <div class="mini-chip status-inline-chip"><span>Region</span><strong id="region-chip">—</strong></div>
             <div class="mini-chip status-inline-chip"><span>Chunk</span><strong id="chunk-chip">0,0</strong></div>
             <div class="mini-chip status-inline-chip"><span>Tile</span><strong id="coord-chip">0,0</strong></div>
+            <div class="mini-chip status-inline-chip"><span>Players</span><strong id="player-presence-pill">0 nearby</strong></div>
+            <div class="mini-chip status-inline-chip"><span>Data</span><strong id="data-source-chip">Checking…</strong></div>
           </div>
           <div class="button-row wrap">
             <button id="back-to-hub-btn" class="secondary">Back to Hub</button>
@@ -73,6 +75,7 @@
               <div class="scene-block compact-block">
                 <span class="block-label">Detailed Tile View</span>
                 <div id="detail-summary" class="block-copy">Enter a tile to inspect the local ground inside that region tile.</div>
+                <div id="selected-tile-players" class="small-copy muted">No other players on this tile.</div>
               </div>
               <div class="scene-block compact-block">
                 <span class="block-label">Resources Nearby</span>

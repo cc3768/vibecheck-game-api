@@ -249,8 +249,8 @@ function requireWorld() {
 }
 
 async function login() {
-  const username = $("username").value.trim() || "demo";
-  const password = $("password").value.trim() || "demo";
+  const username = $("username").value.trim();
+  const password = $("password").value.trim();
   const json = await api("/api/v1/session/login", {
     method: "POST",
     body: JSON.stringify({ username, password })

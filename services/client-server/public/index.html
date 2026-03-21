@@ -31,6 +31,10 @@
             <span>Services</span>
             <strong id="service-status">Waiting…</strong>
           </div>
+          <div class="status-card compact-card">
+            <span>Content Source</span>
+            <strong id="data-source-status">Checking…</strong>
+          </div>
           <button id="refresh-status-btn" class="secondary full-width">Refresh Status</button>
         </div>
       </section>
@@ -47,11 +51,11 @@
         <form id="login-form" class="form-grid">
           <label>
             Username
-            <input id="username" autocomplete="username" placeholder="demo" />
+            <input id="username" autocomplete="username" placeholder="Choose your account name" />
           </label>
           <label>
             Password
-            <input id="password" type="password" autocomplete="current-password" placeholder="demo" />
+            <input id="password" type="password" autocomplete="current-password" placeholder="Enter your password" />
           </label>
           <label class="checkbox-row">
             <input id="remember-me" type="checkbox" />
@@ -63,7 +67,33 @@
           </div>
         </form>
 
-        <div class="meta-grid two-up">
+        <div class="auth-split-grid">
+          <form id="register-form" class="form-grid auth-inline-card">
+            <div class="panel-title-row">
+              <div>
+                <p class="eyebrow">New account</p>
+                <h3>Create account</h3>
+              </div>
+              <span class="tiny-label" id="register-state">Ready</span>
+            </div>
+            <label>
+              Username
+              <input id="register-username" autocomplete="username" placeholder="Create a new account name" />
+            </label>
+            <label>
+              Password
+              <input id="register-password" type="password" autocomplete="new-password" placeholder="Choose a password" />
+            </label>
+            <label>
+              Confirm Password
+              <input id="register-confirm" type="password" autocomplete="new-password" placeholder="Repeat your password" />
+            </label>
+            <div class="button-row">
+              <button type="submit">Create Account</button>
+            </div>
+          </form>
+
+          <div class="meta-grid two-up">
           <div class="compact-card">
             <span>Remembered Username</span>
             <strong id="remembered-user">None</strong>
@@ -72,13 +102,13 @@
             <span>Current Account</span>
             <strong id="current-account">—</strong>
           </div>
+          </div>
         </div>
 
         <div class="notice-box">
           <strong>Current flow</strong>
           <p>
-            This build treats login as account creation for now. After a successful sign-in, you go to the character hub. If no character
-            exists for the account, the hub drops you directly into creation.
+            Login is now separate from registration. New accounts are created here first, then sent to the character hub. Existing accounts can sign in and return to their roster.
           </p>
         </div>
       </section>

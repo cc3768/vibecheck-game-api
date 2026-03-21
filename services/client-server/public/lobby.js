@@ -1,5 +1,5 @@
 import {
-  $, NEWS_ITEMS, api, createCharacter, escapeHtml, loadCharacters, loadFriends, loadProfile, loadSession, loadSettings, pushFeed,
+  $, NEWS_ITEMS, api, contentSourceLabel, createCharacter, escapeHtml, loadCharacters, loadContentSnapshot, loadFriends, loadProfile, loadSession, loadSettings, pushFeed,
   refreshServiceStatus, renderChat, renderFeed, requireSessionOrRedirect, saveFriends, saveProfile, saveSettings,
   selectedCharacter, sendLobbyChat, summarizeServices, titleCase, loadLobbyHistory
 } from "/shared.js";
@@ -114,13 +114,15 @@ function renderSettings() {
 
 async function refreshStatus() {
   try {
-    const json = await refreshServiceStatus();
+    const [json, contentSnapshot] = await Promise.all([refreshServiceStatus(), loadContentSnapshot()]);
     const services = json?.data?.services || [];
     $("gateway-status").textContent = "Online";
     $("service-status").textContent = summarizeServices(services);
+    $("data-source-status").textContent = contentSourceLabel(contentSnapshot);
   } catch (error) {
     $("gateway-status").textContent = "Offline";
     $("service-status").textContent = "Unavailable";
+    $("data-source-status").textContent = "Unavailable";
     pushFeed(profile, "Gateway issue", error instanceof Error ? error.message : String(error), "danger");
     renderFeed($("feed"), profile, "Your hub actions will appear here.");
   }

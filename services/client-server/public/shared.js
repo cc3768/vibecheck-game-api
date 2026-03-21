@@ -33,15 +33,22 @@ export const NEWS_ITEMS = [
   },
   {
     title: "Map-Centered World Screen",
-    body: "The world page is now focused on the chunk map, tile interaction, and the AI action menu instead of a general debug layout.",
+    body: "The world page is now focused on the chunk map, tile interaction, tile-detail zoom, and the AI action menu instead of a debug-first layout.",
     tag: "World"
   },
   {
     title: "Action Outcomes and Inventory",
-    body: "Queued actions now resolve into concrete results, item changes, failures, and specific rewards instead of vague bundles.",
+    body: "Queued actions now resolve into concrete results, item changes, failures, survival pressure, and specific rewards instead of vague bundles.",
     tag: "Actions"
   }
 ];
+
+const DEFAULT_SURVIVAL = {
+  health: 100,
+  water: 100,
+  food: 100,
+  sleep: 100
+};
 
 export function $(id) {
   return document.getElementById(id);
@@ -96,22 +103,28 @@ export function saveRememberedAuth({ remember, username }) {
   writeJson(REMEMBER_KEY, { remember: true, username: String(username || "") });
 }
 
+export function normalizeProfile(profile) {
+  const current = profile && typeof profile === "object" ? profile : {};
+  return {
+    selectedCharacterId: current.selectedCharacterId || null,
+    scene: current.scene || REGION_META.starter_lowlands.position,
+    feed: Array.isArray(current.feed) ? current.feed : [],
+    selectedNpcId: current.selectedNpcId || null,
+    selectedBuildType: current.selectedBuildType || "WOOD_WALL",
+    selectedTile: current.selectedTile || null,
+    selectedSubTile: current.selectedSubTile || { x: 0, y: 0 },
+    mapMode: current.mapMode === "detail" ? "detail" : "region",
+    actionQueue: Array.isArray(current.actionQueue) ? current.actionQueue : [],
+    survival: { ...DEFAULT_SURVIVAL, ...(current.survival || {}) }
+  };
+}
+
 export function loadProfile() {
-  return readJson(PROFILE_KEY, {
-    selectedCharacterId: null,
-    scene: REGION_META.starter_lowlands.position,
-    feed: [],
-    selectedNpcId: null,
-    selectedBuildType: "WOOD_WALL",
-    selectedTile: null,
-    selectedSubTile: { x: 0, y: 0 },
-    mapMode: "region",
-    actionQueue: []
-  });
+  return normalizeProfile(readJson(PROFILE_KEY, {}));
 }
 
 export function saveProfile(profile) {
-  writeJson(PROFILE_KEY, profile);
+  writeJson(PROFILE_KEY, normalizeProfile(profile));
 }
 
 export function clearProfile() {
@@ -236,6 +249,20 @@ export async function refreshServiceStatus() {
 export function summarizeServices(services) {
   const healthy = services.filter((item) => item.healthy).length;
   return `${healthy}/${services.length} healthy`;
+}
+
+export async function loadContentSnapshot(force = false) {
+  const query = force ? "?force=1" : "";
+  const json = await api(`/api/v1/content/snapshot${query}`);
+  return json?.data?.snapshot || json?.data || null;
+}
+
+export function contentSourceLabel(snapshot) {
+  const source = String(snapshot?.source || "unknown").toLowerCase();
+  if (source === "airtable") return "Airtable";
+  if (source === "hybrid") return "Hybrid";
+  if (source === "seed") return "Seed Fallback";
+  return "Unknown";
 }
 
 export async function loadCharacters(accountId) {

@@ -5,5 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "redis": "^4.7.0"
   }
 }

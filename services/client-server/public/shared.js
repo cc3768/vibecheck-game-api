@@ -259,10 +259,13 @@ export async function loadContentSnapshot(force = false) {
 
 export function contentSourceLabel(snapshot) {
   const source = String(snapshot?.source || "unknown").toLowerCase();
+  if (source === "redis") return "Redis";
+  if (source === "redis-seeded") return "Redis (Seeded)";
+  if (source === "redis-unavailable") return "Redis Unavailable";
   if (source === "airtable") return "Airtable";
   if (source === "hybrid") return "Hybrid";
   if (source === "seed") return "Seed Fallback";
-  return "Unknown";
+  return source && source !== "unknown" ? source.replaceAll("-", " ").replace(/\w/g, (m) => m.toUpperCase()) : "Unknown";
 }
 
 export async function loadCharacters(accountId) {

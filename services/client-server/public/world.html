@@ -12,7 +12,7 @@
         <div>
           <p class="eyebrow">World Prime</p>
           <h1 id="world-title">Frontier Map</h1>
-          <p class="muted" id="world-subtitle">Explore the region map, enter a tile for a closer local map, and let AI actions turn intent into outcomes.</p>
+          <p class="muted" id="world-subtitle">Start in the first-person play field, open the tile map for the current 12×12 area, and use the region map as the zoomed-out 12×12 overview.</p>
         </div>
         <div class="topbar-actions compact-topbar-actions">
           <div class="world-badges compact-world-badges">
@@ -60,6 +60,38 @@
 
           <div class="map-stage map-stage-dominant">
             <div class="map-grid-wrap">
+              <section class="world-3d-panel panel-subtle">
+                <div class="panel-title-row tight-row">
+                  <h3>3D Play World</h3>
+                  <div class="button-row wrap">
+                    <span class="tiny-label" id="world-3d-mode-pill">Play view</span>
+                    <button id="hud-view-play-btn" class="secondary">Play View</button>
+                    <button id="hud-view-tile-btn" class="ghost">Tile Map</button>
+                    <button id="hud-view-region-btn" class="ghost">Region Map</button>
+                    <button id="reset-3d-camera-btn" class="ghost">Reset Camera</button>
+                  </div>
+                </div>
+                <div class="world-3d-hud-row">
+                  <div id="play-hud-status" class="play-hud-status">Loading vitals…</div>
+                  <div class="button-row wrap">
+                    <button id="hud-toggle-inventory-btn" class="ghost">Inventory</button>
+                    <button id="hud-toggle-status-btn" class="ghost">Status</button>
+                    <button id="hud-focus-map-btn" class="ghost">Map</button>
+                  </div>
+                </div>
+                <div id="world-3d-view" class="world-3d-view" aria-label="3D world preview">
+                  <canvas id="world-3d-canvas"></canvas>
+                  <div id="world-3d-overlay" class="world-3d-overlay">Loading 3D terrain…</div>
+                  <div class="world-3d-controls" aria-label="Play controls">
+                    <button id="play-turn-left-btn" class="ghost">Turn Left</button>
+                    <button id="play-step-forward-btn">Forward</button>
+                    <button id="play-turn-right-btn" class="ghost">Turn Right</button>
+                    <button id="play-step-left-btn" class="ghost">Step Left</button>
+                    <button id="play-step-back-btn" class="ghost">Back</button>
+                    <button id="play-step-right-btn" class="ghost">Step Right</button>
+                  </div>
+                </div>
+              </section>
               <div id="chunk-grid" class="chunk-grid large-chunk-grid" aria-label="World grid"></div>
             </div>
             <aside class="tile-inspector panel-subtle">
@@ -97,7 +129,7 @@
             </aside>
           </div>
 
-          <section class="panel strip-panel">
+          <section class="panel strip-panel" id="inventory-panel">
             <div class="panel-title-row">
               <h2>Inventory</h2>
               <span class="tiny-label">Below map</span>
@@ -105,7 +137,7 @@
             <div id="inventory-box" class="strip-row"></div>
           </section>
 
-          <section class="panel strip-panel">
+          <section class="panel strip-panel" id="status-panel">
             <div class="panel-title-row">
               <h2>Character State</h2>
               <span class="tiny-label" id="combat-state-pill">No encounter</span>

@@ -6,6 +6,8 @@ import {
 
 const CHUNK_SIZE = 12;
 const DETAIL_GRID_SIZE = 12;
+const PLAYFIELD_SIZE = 64;
+const PLAY_VIEW_DEPTH = 9;
 const AUTO_ANALYZE_DELAY = 2500;
 const profile = normalizeProfile(loadProfile());
 const session = loadSession();
@@ -37,6 +39,7 @@ let worldState = {
   region: null,
   chunk: null,
   detail: null,
+  playField: null,
   nearbyNpcs: [],
   presence: [],
   selectedNpcId: profile.selectedNpcId || null,
@@ -57,9 +60,22 @@ const CACHE_TTLS = {
 };
 let backgroundRefreshToken = 0;
 
+const world3D = {
+  initPromise: null,
+  ready: false,
+  failed: false,
+  canvas: null,
+  ctx: null,
+  hotspots: [],
+  mode: "play"
+};
+
 function ensureProfileDefaults() {
-  profile.mapMode = profile.mapMode === "detail" ? "detail" : "region";
+  profile.mapMode = "detail";
+  profile.viewMode = ["play", "tile", "region"].includes(profile.viewMode) ? profile.viewMode : "play";
   profile.selectedSubTile = profile.selectedSubTile || { x: 0, y: 0 };
+  profile.localBlock = profile.localBlock || { x: Math.floor(PLAYFIELD_SIZE / 2), y: Math.floor(PLAYFIELD_SIZE / 2) };
+  profile.facing = ["north", "east", "south", "west"].includes(profile.facing) ? profile.facing : "north";
   profile.survival = { ...DEFAULT_SURVIVAL, ...(profile.survival || {}) };
   saveProfile(profile);
 }
@@ -181,6 +197,162 @@ function detailCellAt(x, y) {
 function selectedDetailCell() {
   const cell = selectedSubTile();
   return detailCellAt(cell.x, cell.y);
+}
+
+const FACING_ORDER = ["north", "east", "south", "west"];
+const FACING_DELTAS = {
+  north: { dx: 0, dy: -1 },
+  east: { dx: 1, dy: 0 },
+  south: { dx: 0, dy: 1 },
+  west: { dx: -1, dy: 0 }
+};
+
+function currentViewMode() {
+  return ["play", "tile", "region"].includes(profile.viewMode) ? profile.viewMode : "play";
+}
+
+function setViewMode(mode) {
+  profile.viewMode = ["play", "tile", "region"].includes(mode) ? mode : "play";
+  if (profile.viewMode === "region") setMapMode("region");
+  else setMapMode("detail");
+  saveProfile(profile);
+}
+
+function currentFacing() {
+  return FACING_ORDER.includes(profile.facing) ? profile.facing : "north";
+}
+
+function rotateFacing(step) {
+  const index = FACING_ORDER.indexOf(currentFacing());
+  profile.facing = FACING_ORDER[(index + step + FACING_ORDER.length) % FACING_ORDER.length];
+  saveProfile(profile);
+}
+
+function currentLocalBlock() {
+  const block = profile.localBlock || { x: Math.floor(PLAYFIELD_SIZE / 2), y: Math.floor(PLAYFIELD_SIZE / 2) };
+  return {
+    x: clamp(Number(block.x) || 0, 0, PLAYFIELD_SIZE - 1),
+    y: clamp(Number(block.y) || 0, 0, PLAYFIELD_SIZE - 1)
+  };
+}
+
+function setLocalBlock(x, y) {
+  profile.localBlock = {
+    x: clamp(Number(x) || 0, 0, PLAYFIELD_SIZE - 1),
+    y: clamp(Number(y) || 0, 0, PLAYFIELD_SIZE - 1)
+  };
+  saveProfile(profile);
+}
+
+function forwardDelta(facing = currentFacing()) {
+  return FACING_DELTAS[facing] || FACING_DELTAS.north;
+}
+
+function rightDelta(facing = currentFacing()) {
+  const f = forwardDelta(facing);
+  return { dx: -f.dy, dy: f.dx };
+}
+
+function terrainHex(kind) {
+  return `#${terrainColor(kind).toString(16).padStart(6, "0")}`;
+}
+
+function objectTypeForKind(kind, seed) {
+  const pick = pseudo(seed);
+  if (String(kind) === "forest") return pick > 0.45 ? "herb patch" : "tree";
+  if (String(kind) === "rock") return pick > 0.55 ? "ore seam" : "stone cluster";
+  if (String(kind) === "water") return "water edge";
+  if (String(kind) === "grass") return pick > 0.5 ? "berries" : "fallen branch";
+  return "ground sign";
+}
+
+function playKindFor(tile, cell, x, y) {
+  const seed = (tile?.x || 0) * 7001 + (tile?.y || 0) * 9157 + (cell?.x || 0) * 313 + (cell?.y || 0) * 619 + x * 17 + y * 23;
+  const noise = pseudo(seed);
+  const base = String(cell?.kind || tile?.kind || "grass").toLowerCase();
+  if (base === "water") return noise > 0.72 ? "grass" : "water";
+  if (base === "rock") return noise > 0.82 ? "grass" : noise > 0.26 ? "rock" : "path";
+  if (base === "forest") return noise > 0.74 ? "grass" : noise > 0.18 ? "forest" : "path";
+  if (noise > 0.92) return "water";
+  if (noise > 0.78) return "forest";
+  if (noise < 0.1) return "rock";
+  return noise < 0.18 ? "path" : base;
+}
+
+function buildPlayField(tile, cell, size = PLAYFIELD_SIZE) {
+  const blocks = [];
+  const center = Math.floor(size / 2);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      let kind = playKindFor(tile, cell, x, y);
+      const trailBias = Math.abs(x - center) < 2 || Math.abs(y - center) < 2;
+      if (trailBias && kind !== "water" && pseudo((x + 1) * 19 + (y + 1) * 11 + (tile?.x || 0) * 3) > 0.52) kind = "path";
+      const objectRoll = pseudo((tile?.x || 0) * 53 + (tile?.y || 0) * 59 + (cell?.x || 0) * 61 + (cell?.y || 0) * 67 + x * 71 + y * 73);
+      const hasObject = kind !== "water" && objectRoll > 0.968;
+      const objectType = hasObject ? objectTypeForKind(kind, objectRoll) : null;
+      const walkable = kind !== "water" && objectType !== "tree";
+      blocks.push({ x, y, kind, walkable, hasObject, objectType, label: objectType || `${titleCase(kind)} ground` });
+    }
+  }
+  const spawn = currentLocalBlock();
+  return {
+    size,
+    source: "client-playfield",
+    tileX: Number(tile?.x || 0),
+    tileY: Number(tile?.y || 0),
+    cellX: Number(cell?.x || 0),
+    cellY: Number(cell?.y || 0),
+    blocks,
+    spawnedAt: { x: spawn.x, y: spawn.y }
+  };
+}
+
+function ensurePlayField() {
+  const tile = selectedTile();
+  const cell = selectedDetailCell() || selectedTile() || null;
+  if (!tile) {
+    worldState.playField = null;
+    return;
+  }
+  worldState.playField = buildPlayField(tile, cell, PLAYFIELD_SIZE);
+  const current = currentLocalBlock();
+  setLocalBlock(current.x, current.y);
+}
+
+function playBlockAt(x, y) {
+  const field = worldState.playField;
+  if (!field || x < 0 || y < 0 || x >= field.size || y >= field.size) return null;
+  return field.blocks[(y * field.size) + x] || null;
+}
+
+function promptActionForTarget(target) {
+  const defaultText = target?.actionText || `I inspect the ${target?.label || "area"}.`;
+  const answer = window.prompt(`Action for ${target?.label || "this spot"}:`, defaultText);
+  if (!answer) return;
+  const noteField = $("action-note");
+  if (noteField) noteField.value = answer;
+  void analyzeAction();
+}
+
+function togglePanelVisibility(id) {
+  const element = $(id);
+  if (!element) return;
+  element.classList.toggle("section-hidden");
+}
+
+function renderHudStatus() {
+  const target = $("play-hud-status");
+  if (!target) return;
+  const vitals = effectiveVitals();
+  const values = {
+    health: Math.round(Number(vitals.health ?? profile.survival?.health ?? 100)),
+    water: Math.round(Number(vitals.water ?? profile.survival?.water ?? 100)),
+    food: Math.round(Number(vitals.food ?? profile.survival?.food ?? 100)),
+    sleep: Math.round(Number(vitals.sleep ?? profile.survival?.sleep ?? 100))
+  };
+  target.innerHTML = Object.entries(values)
+    .map(([key, value]) => `<span class="mini-chip hud-chip"><strong>${escapeHtml(titleCase(key))}</strong> ${value}</span>`)
+    .join("");
 }
 
 function normalizeNpcRecord(raw, fallbackKey = null) {
@@ -873,6 +1045,7 @@ async function hydrateTileDetail() {
   }
   const sub = selectedSubTile();
   setSelectedSubTile(clamp(sub.x, 0, worldState.detail.size - 1), clamp(sub.y, 0, worldState.detail.size - 1));
+  ensurePlayField();
 }
 
 
@@ -897,12 +1070,11 @@ async function refreshWorld({ forceContent = false, includeNpcs = false } = {}) 
   if (!sheet.character && !sheet.stats) {
     await syncSheetCore();
   }
-  if (profile.mapMode === "detail") {
-    try {
-      await hydrateTileDetail();
-    } catch {
-      worldState.detail = selectedTile() ? buildFallbackDetail(selectedTile()) : null;
-    }
+  try {
+    await hydrateTileDetail();
+  } catch {
+    worldState.detail = selectedTile() ? buildFallbackDetail(selectedTile()) : null;
+    ensurePlayField();
   }
   renderAll();
   void updatePresence();
@@ -951,11 +1123,31 @@ async function moveWithinDetail(dx, dy) {
   const nextX = clamp(current.x + dx, 0, worldState.detail.size - 1);
   const nextY = clamp(current.y + dy, 0, worldState.detail.size - 1);
   setSelectedSubTile(nextX, nextY);
+  ensurePlayField();
+  renderAll();
+}
+
+async function movePlayField(forwardSteps = 0, sidewaysSteps = 0) {
+  ensurePlayField();
+  const player = currentLocalBlock();
+  const forward = forwardDelta();
+  const right = rightDelta();
+  const nextX = player.x + forward.dx * forwardSteps + right.dx * sidewaysSteps;
+  const nextY = player.y + forward.dy * forwardSteps + right.dy * sidewaysSteps;
+  const block = playBlockAt(nextX, nextY);
+  if (!block) throw new Error("You cannot move beyond the edge of this local play field.");
+  if (!block.walkable) throw new Error(`The ${block.objectType || block.kind} blocks the way.`);
+  setLocalBlock(nextX, nextY);
+  adjustSurvival({ water: -0.3, food: -0.2, sleep: -0.08 }, `${hero?.name || "You"} moved through the play field.`);
   renderAll();
 }
 
 async function moveBy(dx, dy) {
   if (profile.mapMode === "detail") {
+    if (currentViewMode() === "play") {
+      await movePlayField(-dy, dx);
+      return;
+    }
     await moveWithinDetail(dx, dy);
     return;
   }
@@ -989,18 +1181,19 @@ async function handleTileClick(x, y) {
 
 async function handleDetailClick(x, y) {
   setSelectedSubTile(x, y);
+  ensurePlayField();
   renderAll();
 }
 
 async function enterTileDetail() {
   if (!selectedTile()) throw new Error("Select a region tile first.");
-  setMapMode("detail");
+  setViewMode("play");
   await hydrateTileDetail();
   renderAll();
 }
 
 async function exitTileDetail() {
-  setMapMode("region");
+  setViewMode("region");
   renderAll();
 }
 
@@ -1307,7 +1500,300 @@ async function completeQuest() {
   renderQuest();
 }
 
+function terrainColor(kind) {
+  switch (String(kind || "grass").toLowerCase()) {
+    case "forest": return 0x295d39;
+    case "water": return 0x2563c9;
+    case "rock": return 0x7b8597;
+    case "sand": return 0xb79b67;
+    case "path": return 0x82684a;
+    case "mud": return 0x5f4b36;
+    default: return 0x4f9d57;
+  }
+}
+
+function terrainHeight(kind, x, y, scale = 1) {
+  const base = {
+    water: 0.18,
+    grass: 0.55,
+    forest: 0.82,
+    rock: 1.18,
+    sand: 0.34,
+    path: 0.24,
+    mud: 0.28
+  }[String(kind || "grass").toLowerCase()] ?? 0.5;
+  const noise = (pseudo((Number(x) + 1) * 11.13 + (Number(y) + 1) * 7.91) - 0.5) * 0.18;
+  return Math.max(0.08, (base + noise) * scale);
+}
+
+function ensureWorld3DReady() {
+  if (world3D.failed) return false;
+  if (world3D.ready) return true;
+  const canvas = $("world-3d-canvas");
+  const mount = $("world-3d-view");
+  const overlay = $("world-3d-overlay");
+  if (!canvas || !mount) {
+    world3D.failed = true;
+    return false;
+  }
+  const width = Math.max(mount.clientWidth || 640, 320);
+  const height = Math.max(mount.clientHeight || 360, 240);
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(width * ratio);
+  canvas.height = Math.round(height * ratio);
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    world3D.failed = true;
+    if (overlay) overlay.textContent = "3D play view unavailable in this browser.";
+    return false;
+  }
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  world3D.canvas = canvas;
+  world3D.ctx = ctx;
+  world3D.ready = true;
+  return true;
+}
+
+function clearWorld3DScene() {
+  world3D.hotspots = [];
+}
+
+function updateWorld3DOverlay(message) {
+  const overlay = $("world-3d-overlay");
+  if (overlay) overlay.textContent = message;
+}
+
+function drawSkyAndGround(ctx, width, height) {
+  const sky = ctx.createLinearGradient(0, 0, 0, height * 0.55);
+  sky.addColorStop(0, "#0e2340");
+  sky.addColorStop(1, "#08111d");
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, width, height * 0.55);
+  const floor = ctx.createLinearGradient(0, height * 0.42, 0, height);
+  floor.addColorStop(0, "#13273d");
+  floor.addColorStop(1, "#081018");
+  ctx.fillStyle = floor;
+  ctx.fillRect(0, height * 0.42, width, height * 0.58);
+}
+
+function samplePlayPosition(distance, lateral) {
+  const player = currentLocalBlock();
+  const forward = forwardDelta();
+  const right = rightDelta();
+  return {
+    x: player.x + (forward.dx * distance) + (right.dx * lateral),
+    y: player.y + (forward.dy * distance) + (right.dy * lateral)
+  };
+}
+
+function renderPlayMiniMap(ctx, width, height, field) {
+  if (!field) return;
+  const mapSize = 120;
+  const cell = mapSize / field.size;
+  const x0 = width - mapSize - 18;
+  const y0 = 18;
+  ctx.fillStyle = "rgba(5,10,18,0.72)";
+  ctx.fillRect(x0 - 8, y0 - 8, mapSize + 16, mapSize + 16);
+  for (let y = 0; y < field.size; y += 1) {
+    for (let x = 0; x < field.size; x += 1) {
+      const block = playBlockAt(x, y);
+      ctx.fillStyle = terrainHex(block?.kind || "grass");
+      ctx.fillRect(x0 + x * cell, y0 + y * cell, Math.ceil(cell), Math.ceil(cell));
+      if (block?.hasObject) {
+        ctx.fillStyle = "#f5d37b";
+        ctx.fillRect(x0 + x * cell + cell * 0.25, y0 + y * cell + cell * 0.25, Math.max(1, cell * 0.5), Math.max(1, cell * 0.5));
+      }
+    }
+  }
+  const player = currentLocalBlock();
+  ctx.fillStyle = "#7de2ff";
+  ctx.beginPath();
+  ctx.arc(x0 + player.x * cell + cell * 0.5, y0 + player.y * cell + cell * 0.5, Math.max(2, cell * 1.1), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#f8fbff";
+  ctx.font = "12px sans-serif";
+  ctx.fillText(`64×64 play field • facing ${titleCase(currentFacing())}`, x0 - 2, y0 + mapSize + 18);
+}
+
+function renderPlayViewCanvas(ctx, width, height, field) {
+  drawSkyAndGround(ctx, width, height);
+  const horizon = height * 0.45;
+  world3D.hotspots = [];
+
+  ctx.strokeStyle = "rgba(125, 226, 255, 0.12)";
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 5; i += 1) {
+    const y = horizon + i * 34;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+
+  for (let distance = PLAY_VIEW_DEPTH; distance >= 1; distance -= 1) {
+    const laneWidth = width / (distance * 2 + 6);
+    for (let lateral = -distance; lateral <= distance; lateral += 1) {
+      const pos = samplePlayPosition(distance, lateral);
+      const block = playBlockAt(pos.x, pos.y);
+      if (!block) continue;
+      const depthScale = 1 / (distance * 0.38 + 0.52);
+      const rectWidth = Math.max(16, laneWidth * 1.28);
+      const rectHeight = Math.max(20, (block.kind === "forest" ? 112 : block.kind === "rock" ? 94 : block.kind === "water" ? 28 : 68) * depthScale);
+      const x = (width / 2) + lateral * laneWidth - rectWidth / 2;
+      const y = horizon + (distance * 18) - rectHeight;
+      ctx.fillStyle = terrainHex(block.kind);
+      ctx.globalAlpha = Math.max(0.26, 1 - distance * 0.08);
+      ctx.fillRect(x, y, rectWidth, rectHeight);
+      ctx.strokeStyle = "rgba(255,255,255,0.06)";
+      ctx.strokeRect(x, y, rectWidth, rectHeight);
+      if (block.hasObject) {
+        const objHeight = Math.max(12, rectHeight * 0.5);
+        ctx.fillStyle = block.objectType === "herb patch" ? "#9df78b" : block.objectType === "ore seam" ? "#b8c7ff" : "#f2d18c";
+        ctx.fillRect(x + rectWidth * 0.28, y - objHeight * 0.45, rectWidth * 0.44, objHeight);
+        if (distance <= 4 && Math.abs(lateral) <= 2) {
+          world3D.hotspots.push({
+            x,
+            y: y - objHeight * 0.45,
+            width: rectWidth,
+            height: rectHeight + objHeight * 0.45,
+            label: block.objectType || block.label,
+            actionText: `I inspect the ${block.objectType || block.label} ahead of me at local block ${pos.x}, ${pos.y}.`
+          });
+        }
+      } else if (distance === 1 && Math.abs(lateral) <= 1) {
+        world3D.hotspots.push({
+          x,
+          y,
+          width: rectWidth,
+          height: rectHeight,
+          label: block.label,
+          actionText: `I inspect the ${block.label} directly ahead at local block ${pos.x}, ${pos.y}.`
+        });
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  ctx.strokeStyle = "rgba(125,226,255,0.75)";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(width / 2 - 10, height * 0.55);
+  ctx.lineTo(width / 2 + 10, height * 0.55);
+  ctx.moveTo(width / 2, height * 0.55 - 10);
+  ctx.lineTo(width / 2, height * 0.55 + 10);
+  ctx.stroke();
+
+  renderPlayMiniMap(ctx, width, height, field);
+  const player = currentLocalBlock();
+  updateWorld3DOverlay(`First-person play field • tile ${selectedTileCoords().x}, ${selectedTileCoords().y} • local block ${player.x}, ${player.y} • click what you see to draft an action.`);
+}
+
+function isoProject(x, y, h, scale, ox, oy) {
+  return { x: ox + (x - y) * scale, y: oy + (x + y) * scale * 0.5 - h };
+}
+
+function drawIsoColumn(ctx, x, y, h, color, scale, ox, oy) {
+  const top = isoProject(x, y, h, scale, ox, oy);
+  const east = isoProject(x + 1, y, h, scale, ox, oy);
+  const south = isoProject(x, y + 1, h, scale, ox, oy);
+  const southEast = isoProject(x + 1, y + 1, h, scale, ox, oy);
+  const base = isoProject(x, y, 0, scale, ox, oy);
+  const baseEast = isoProject(x + 1, y, 0, scale, ox, oy);
+  const baseSouth = isoProject(x, y + 1, 0, scale, ox, oy);
+  const rgb = color.replace("#", "");
+  const r = parseInt(rgb.slice(0, 2), 16), g = parseInt(rgb.slice(2, 4), 16), b = parseInt(rgb.slice(4, 6), 16);
+  ctx.fillStyle = `rgba(${r},${g},${b},0.95)`;
+  ctx.beginPath();
+  ctx.moveTo(top.x, top.y);
+  ctx.lineTo(east.x, east.y);
+  ctx.lineTo(southEast.x, southEast.y);
+  ctx.lineTo(south.x, south.y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = `rgba(${Math.max(0, r - 26)},${Math.max(0, g - 26)},${Math.max(0, b - 26)},0.95)`;
+  ctx.beginPath();
+  ctx.moveTo(top.x, top.y);
+  ctx.lineTo(south.x, south.y);
+  ctx.lineTo(baseSouth.x, baseSouth.y);
+  ctx.lineTo(base.x, base.y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = `rgba(${Math.min(255, r + 16)},${Math.min(255, g + 16)},${Math.min(255, b + 16)},0.95)`;
+  ctx.beginPath();
+  ctx.moveTo(top.x, top.y);
+  ctx.lineTo(east.x, east.y);
+  ctx.lineTo(baseEast.x, baseEast.y);
+  ctx.lineTo(base.x, base.y);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function renderOverviewCanvas(ctx, width, height, entries, size, mode) {
+  drawSkyAndGround(ctx, width, height);
+  const scale = mode === "region" ? 16 : 18;
+  const ox = width / 2;
+  const oy = height * 0.66;
+  entries.slice().sort((a, b) => (a.x + a.y) - (b.x + b.y)).forEach((entry) => {
+    const h = 18 + terrainHeight(entry.kind, entry.x, entry.y, mode === "region" ? 18 : 16) * 12;
+    drawIsoColumn(ctx, entry.x, entry.y, h, terrainHex(entry.kind), scale, ox - (size * scale * 0.5) + scale * 0.5, oy - (size * scale * 0.25));
+  });
+  updateWorld3DOverlay(mode === "region"
+    ? `Region map • 12×12 overview of the surrounding tiles. Select a tile, then enter the local tile map and play field.`
+    : `Tile map • 12×12 zoomed-in grid inside region tile ${selectedTileCoords().x}, ${selectedTileCoords().y}.`);
+}
+
+function renderWorld3D() {
+  const ok = ensureWorld3DReady();
+  if (!ok) return;
+  const ctx = world3D.ctx;
+  const canvas = world3D.canvas;
+  if (!ctx || !canvas) return;
+  const width = canvas.clientWidth || 640;
+  const height = canvas.clientHeight || 360;
+  clearWorld3DScene();
+  ctx.clearRect(0, 0, width, height);
+
+  const viewMode = currentViewMode();
+  if (viewMode === "play" && worldState.playField) {
+    world3D.mode = "play";
+    setText("world-3d-mode-pill", "Play view");
+    renderPlayViewCanvas(ctx, width, height, worldState.playField);
+    return;
+  }
+
+  if (viewMode === "tile" && worldState.detail?.cells?.length) {
+    world3D.mode = "tile";
+    setText("world-3d-mode-pill", "Tile map");
+    renderOverviewCanvas(ctx, width, height, worldState.detail.cells, Number(worldState.detail.size || DETAIL_GRID_SIZE) || DETAIL_GRID_SIZE, "tile");
+    return;
+  }
+
+  if (worldState.chunk?.tiles?.length) {
+    world3D.mode = "region";
+    setText("world-3d-mode-pill", "Region map");
+    const chunk = worldState.chunk;
+    const size = Number(chunk.size || CHUNK_SIZE) || CHUNK_SIZE;
+    const originX = Number(chunk.originX ?? Math.min(...chunk.tiles.map((tile) => tile.x)));
+    const originY = Number(chunk.originY ?? Math.min(...chunk.tiles.map((tile) => tile.y)));
+    const entries = chunk.tiles.map((tile) => ({ ...tile, x: tile.x - originX, y: tile.y - originY }));
+    renderOverviewCanvas(ctx, width, height, entries, size, "region");
+    return;
+  }
+
+  drawSkyAndGround(ctx, width, height);
+  updateWorld3DOverlay("World view is waiting for map data.");
+}
+
+function resetWorld3DCamera() {
+  if (currentViewMode() !== "play") return;
+  setLocalBlock(Math.floor(PLAYFIELD_SIZE / 2), Math.floor(PLAYFIELD_SIZE / 2));
+  renderWorld3D();
+}
+
 function renderRegionMap(target) {
+
   const scene = currentScene();
   const selected = selectedTileCoords();
   const chunk = worldState.chunk;
@@ -1381,11 +1867,12 @@ function renderMap() {
   const scene = currentScene();
   const selected = selectedTileCoords();
   setText("chunk-chip", `${currentChunkMeta().chunkX},${currentChunkMeta().chunkY}`);
+  const local = currentLocalBlock();
   setText("coord-chip", profile.mapMode === "detail"
-    ? `${selected.x},${selected.y} • ${selectedSubTile().x},${selectedSubTile().y}`
+    ? `${selected.x},${selected.y} • ${selectedSubTile().x},${selectedSubTile().y} • ${local.x},${local.y}`
     : `${selected.x},${selected.y}`);
-  setText("map-level-pill", profile.mapMode === "detail" ? "Tile detail" : "Region map");
-  setDisabled("enter-tile-btn", profile.mapMode === "detail");
+  setText("map-level-pill", currentViewMode() === "play" ? "Play field" : currentViewMode() === "tile" ? "Tile map" : "Region map");
+  setDisabled("enter-tile-btn", profile.mapMode === "detail" && currentViewMode() === "play");
   setDisabled("exit-tile-btn", profile.mapMode !== "detail");
   if (profile.mapMode === "detail") {
     renderDetailMap(target);
@@ -1424,13 +1911,14 @@ function renderInspector() {
 
   if (profile.mapMode === "detail" && worldState.detail) {
     const cell = selectedDetailCell();
+    const local = currentLocalBlock();
     $("detail-summary").textContent = worldState.detail.summary || "Tile detail loaded.";
     if (cell) {
-      $("detail-summary").textContent = `${worldState.detail.summary} Selected local cell ${cell.x}, ${cell.y} is ${titleCase(cell.kind)}${cell.walkable ? " and passable." : " and blocked."}`;
+      $("detail-summary").textContent = `${worldState.detail.summary} Selected tile-map cell ${cell.x}, ${cell.y} is ${titleCase(cell.kind)}${cell.walkable ? " and passable." : " and blocked."}. The live play field inside it is 64×64 blocks and you are standing at ${local.x}, ${local.y}.`;
     }
   } else {
     $("detail-summary").textContent = tile
-      ? `Enter tile ${tile.x}, ${tile.y} to view the zoomed-in local map inside this region tile.`
+      ? `Enter tile ${tile.x}, ${tile.y} to view the 12×12 tile map, then drop into the 64×64 block play field.`
       : "Enter a tile to inspect the local ground inside that region tile.";
   }
 
@@ -1439,7 +1927,9 @@ function renderInspector() {
     : "No other players on this tile.";
 
   $("edge-travel-summary").textContent = profile.mapMode === "detail"
-    ? "You are viewing the inner tile map. Arrow buttons now move inside the local tile until you return to the region map."
+    ? currentViewMode() === "play"
+      ? "You are in the first-person play field. Use the on-screen play controls to move through the 64×64 local blocks, or switch to Tile Map / Region Map above."
+      : "You are viewing the inner 12×12 tile map. Switch back to Play View to walk the 64×64 block field inside the selected tile-map cell."
     : "Move toward a region edge and the neighboring region takes over automatically when a linked border exists.";
 }
 
@@ -1562,7 +2052,9 @@ function renderInventory() {
 
 function renderAll() {
   renderMap();
+  renderWorld3D();
   renderInspector();
+  renderHudStatus();
   renderNpcList();
   renderDialogue();
   renderQuest();
@@ -1581,12 +2073,35 @@ async function boot() {
   await requireSessionOrRedirect();
   await loadHero();
   populateBuildTypes();
+  setViewMode("play");
   renderAll();
+  ensureWorld3DReady();
   await ensureWorldPosition();
   await refreshWorld();
   renderFeed($("feed"), profile, "Your adventure entries will appear here.");
 }
 
+function handleWorldCanvasClick(event) {
+  if (currentViewMode() !== "play") return;
+  const canvas = world3D.canvas;
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+  const hit = [...(world3D.hotspots || [])].reverse().find((spot) => x >= spot.x && x <= spot.x + spot.width && y >= spot.y && y <= spot.y + spot.height);
+  if (hit) {
+    promptActionForTarget(hit);
+    return;
+  }
+  const ahead = samplePlayPosition(1, 0);
+  const block = playBlockAt(ahead.x, ahead.y) || playBlockAt(currentLocalBlock().x, currentLocalBlock().y);
+  if (block) promptActionForTarget({ label: block.label, actionText: `I inspect the ${block.label} in front of me near local block ${ahead.x}, ${ahead.y}.` });
+}
+
+function focusOrToggleMap() {
+  setViewMode(currentViewMode() === "region" ? "tile" : "region");
+  renderAll();
+}
 
 function attach(id, handler) {
   const element = $(id);
@@ -1624,6 +2139,19 @@ function setNpcModalOpen(open) {
 attach("back-to-hub-btn", async () => { window.location.href = "/lobby.html"; });
 attach("refresh-world-btn", async () => refreshWorld({ forceContent: true }));
 attach("open-npc-btn", async () => { setNpcModalOpen(true); await ensureNearbyNpcsLoaded(); renderNpcList(); renderDialogue(); });
+attach("reset-3d-camera-btn", async () => resetWorld3DCamera());
+attach("hud-view-play-btn", async () => { setViewMode("play"); ensurePlayField(); });
+attach("hud-view-tile-btn", async () => { setViewMode("tile"); await hydrateTileDetail(); });
+attach("hud-view-region-btn", async () => { setViewMode("region"); });
+attach("hud-toggle-inventory-btn", async () => togglePanelVisibility("inventory-panel"));
+attach("hud-toggle-status-btn", async () => togglePanelVisibility("status-panel"));
+attach("hud-focus-map-btn", async () => focusOrToggleMap());
+attach("play-turn-left-btn", async () => { rotateFacing(-1); });
+attach("play-turn-right-btn", async () => { rotateFacing(1); });
+attach("play-step-forward-btn", async () => movePlayField(1, 0));
+attach("play-step-back-btn", async () => movePlayField(-1, 0));
+attach("play-step-left-btn", async () => movePlayField(0, -1));
+attach("play-step-right-btn", async () => movePlayField(0, 1));
 attach("close-npc-btn", async () => setNpcModalOpen(false));
 attach("enter-tile-btn", enterTileDetail);
 attach("exit-tile-btn", exitTileDetail);
@@ -1659,6 +2187,8 @@ $("build-type-select")?.addEventListener("change", renderBuildRequirement);
 $("action-note")?.addEventListener("input", scheduleAnalyze);
 $("primary-skill-select")?.addEventListener("change", scheduleAnalyze);
 $("secondary-skill-select")?.addEventListener("change", scheduleAnalyze);
+$("world-3d-canvas")?.addEventListener("click", handleWorldCanvasClick);
+window.addEventListener("resize", () => { world3D.ready = false; ensureWorld3DReady(); renderWorld3D(); });
 
 document.querySelectorAll(".guide-question-btn").forEach((button) => {
   button.addEventListener("click", async () => {

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Vibecheck Game · Loading World</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/world-transition.css" />
+  </head>
+  <body class="page-transition">
+    <main class="transition-shell">
+      <section class="transition-card panel glass">
+        <p class="eyebrow">Character hub → play world</p>
+        <h1 id="transition-title">Preparing your world</h1>
+        <p id="transition-copy" class="muted transition-copy">
+          Reading the selected character, resolving spawn location, and streaming nearby terrain before the play world opens.
+        </p>
+
+        <div class="transition-progress" aria-hidden="true">
+          <span id="transition-progress-bar"></span>
+        </div>
+
+        <div class="transition-meta-grid">
+          <div class="compact-card">
+            <span>Character</span>
+            <strong id="transition-hero">—</strong>
+          </div>
+          <div class="compact-card">
+            <span>Destination</span>
+            <strong id="transition-destination">—</strong>
+          </div>
+          <div class="compact-card">
+            <span>Stage</span>
+            <strong id="transition-stage">Starting…</strong>
+          </div>
+        </div>
+
+        <div id="transition-error" class="transition-error hidden" role="alert"></div>
+
+        <div class="button-row wrap transition-actions">
+          <button id="retry-loading-btn" class="secondary hidden">Retry Load</button>
+          <button id="back-to-lobby-btn" class="ghost">Back to Hub</button>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/loading.js"></script>
+  </body>
+</html>

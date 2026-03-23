@@ -118,7 +118,7 @@ const contentCache: ContentSnapshot = {
   discoveries: [],
   aliases: {},
   recipes: {},
-  source: "seed"
+  source: "redis"
 };
 let contentCacheAt = 0;
 
@@ -136,10 +136,12 @@ async function ensureContentCache(force = false) {
     contentCache.discoveries = snapshot.discoveries ?? [];
     contentCache.aliases = snapshot.aliases ?? {};
     contentCache.recipes = snapshot.recipes ?? {};
-    contentCache.source = snapshot.source ?? "seed";
+    contentCache.source = snapshot.source ?? "redis";
     contentCacheAt = Date.now();
-  } catch {
-    if (!contentCacheAt) contentCacheAt = Date.now();
+  } catch (error) {
+    if (!contentCacheAt) {
+      throw new Error(error instanceof Error ? error.message : "content-system is unavailable");
+    }
   }
   return contentCache;
 }

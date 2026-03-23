@@ -310,21 +310,9 @@ async function getContentSnapshot(force = false): Promise<ContentSnapshot> {
     const data = await serviceFetch<ContentSnapshot>("content-system", "/api/v1/content/snapshot");
     snapshotCache = { at: Date.now(), data };
     return data;
-  } catch {
-    const fallback: ContentSnapshot = {
-      items: {},
-      dynamicItems: Object.fromEntries(FALLBACK_DISCOVERIES.filter((entry) => entry.item).map((entry) => [entry.item!.itemKey, entry.item!])),
-      skills: Object.fromEntries(FALLBACK_DISCOVERIES.filter((entry) => entry.skill).map((entry) => [entry.skill!.skillKey, entry.skill!])),
-      skillPrereqs: {},
-      intentSkills: {},
-      herbCatalog: [],
-      discoveries: FALLBACK_DISCOVERIES,
-      aliases: Object.fromEntries(FALLBACK_DISCOVERIES.flatMap((entry) => (entry.aliases ?? []).map((alias) => [normalizeText(alias), { canonicalType: entry.type, canonicalKey: entry.targetKey, confidenceBoost: 0.18 }]))),
-      recipes: {},
-      source: "seed"
-    };
-    snapshotCache = { at: Date.now(), data: fallback };
-    return fallback;
+  } catch (error) {
+    if (snapshotCache.data) return snapshotCache.data;
+    throw new Error(error instanceof Error ? error.message : "content-system is unavailable");
   }
 }
 
